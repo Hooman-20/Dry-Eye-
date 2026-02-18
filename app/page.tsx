@@ -266,24 +266,25 @@ export default function Page() {
     }
   }
 
-  function showAlertNotification() {
-    if (!notifEnabled) return;
-    if (!mounted) return;
-    if (!("Notification" in window)) return;
-    if (Notification.permission !== "granted") return;
+  async function requestNotifPermission() {
+  if (typeof window === "undefined") return;
+  if (!("Notification" in window)) return;
 
-    const now = Date.now();
-    if (now - lastNotifAtRef.current < NOTIF_COOLDOWN_MS) return;
-    lastNotifAtRef.current = now;
+  try {
+    const perm = await Notification.requestPermission();
+    dispatch({ type: "SET_NOTIF_PERMISSION", perm });
 
-    try {
-      new Notification("Blink reminder", {
-        body: "No blink detected — please blink.",
+    // Test notification immediately
+    if (perm === "granted") {
+      new Notification("Notifications enabled", {
+        body: "You will get an alert when you stop blinking."
       });
-    } catch {
-      // ignore
     }
+  } catch {
+    // ignore
   }
+}
+
 
   function setNoBlinkAlert(seconds: number) {
     dispatch({ type: "SET_THRESHOLD", seconds });
