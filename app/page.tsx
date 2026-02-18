@@ -85,7 +85,7 @@ const initialState: UiState = {
   blinksPerMin: 0,
   secondsSinceBlink: 0,
   alertOn: false,
-  noBlinkThreshold: 10, // default = 10 sec
+  noBlinkThreshold: 10,
   agreed: false,
   error: null,
 
@@ -151,7 +151,7 @@ function reducer(state: UiState, action: Action): UiState {
 }
 
 export default function Page() {
-  // ✅ prevent hydration mismatch for Notification/window-dependent UI
+  // prevent hydration mismatch for Notification/window-dependent UI
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -196,7 +196,7 @@ export default function Page() {
   const sessionStartRef = useRef<number | null>(null);
   const blinkCountRef = useRef(0);
 
-  // Audio (reuse one context)
+  // Audio
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Notifications
@@ -211,10 +211,8 @@ export default function Page() {
   const MIN_CLOSED_FRAMES = 2;
   const MIN_BLINK_GAP_MS = 350;
 
-  // Repeat beep while danger continues (until blink)
   const ALERT_REPEAT_MS = 2000;
 
-  // Reduce re-render spam: update BPM at most every 400ms
   const lastBpmUpdateRef = useRef(0);
   const BPM_UPDATE_MS = 400;
 
@@ -223,14 +221,10 @@ export default function Page() {
       (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
     if (!AudioCtx) return;
 
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioCtx();
-    }
+    if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
     const ctx = audioCtxRef.current;
 
-    if (ctx.state === "suspended") {
-      ctx.resume().catch(() => {});
-    }
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -261,24 +255,36 @@ export default function Page() {
     try {
       const perm = await Notification.requestPermission();
       dispatch({ type: "SET_NOTIF_PERMISSION", perm });
+
+      // quick sanity test
+      if (perm === "granted") {
+        try {
+          new Notification("Notifications enabled", {
+            body: "You’ll get an alert when you stop blinking.",
+          });
+        } catch {}
+      }
     } catch {
       // ignore
     }
   }
 
-  async function requestNotifPermission() {
-  if (typeof window === "undefined") return;
-  if (!("Notification" in window)) return;
+  function showAlertNotification() {
+    if (!notifEnabled) return;
+    if (!mounted) return;
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
 
-  try {
-    const perm = await Notification.requestPermission();
-    dispatch({ type: "SET_NOTIF_PERMISSION", perm });
-  } catch {
-    // ignore
+    const now = Date.now();
+    if (now - lastNotifAtRef.current < NOTIF_COOLDOWN_MS) return;
+    lastNotifAtRef.current = now;
+
+    try {
+      new Notification("Blink reminder", {
+        body: "No blink detected — please blink.",
+      });
+    } catch {}
   }
-}
-
-
 
   function setNoBlinkAlert(seconds: number) {
     dispatch({ type: "SET_THRESHOLD", seconds });
@@ -334,7 +340,6 @@ export default function Page() {
 
       const video = videoRef.current;
       const canvas = hiddenCanvasRef.current;
-
       if (!video || !canvas) throw new Error("Video/canvas not ready.");
 
       video.srcObject = stream;
@@ -363,7 +368,6 @@ export default function Page() {
         const lm = res.multiFaceLandmarks[0] as Point[];
         const now = performance.now();
 
-        // Eye landmarks for EAR
         const L = { p1: 33, p2: 160, p3: 159, p4: 133, p5: 145, p6: 144 };
         const R = { p1: 362, p2: 387, p3: 386, p4: 263, p5: 374, p6: 373 };
 
@@ -371,7 +375,7 @@ export default function Page() {
         const right = ear(lm[R.p1], lm[R.p2], lm[R.p3], lm[R.p4], lm[R.p5], lm[R.p6]);
         const curEar = (left + right) / 2;
 
-        // Calibration (collect open-eye samples)
+        // calibration
         if (baselineEarRef.current === null) {
           if (calibStartRef.current === null) calibStartRef.current = now;
 
@@ -392,12 +396,10 @@ export default function Page() {
           return;
         }
 
-        // Blink thresholds
         const baseline = baselineEarRef.current;
         const closeThr = baseline * CLOSE_RATIO;
         const openThr = baseline * OPEN_RATIO;
 
-        // Blink detection state machine
         if (eyeStateRef.current === "OPEN") {
           if (curEar < closeThr) {
             closedFramesRef.current = 1;
@@ -415,7 +417,6 @@ export default function Page() {
               dispatch({ type: "SET_BLINKS", blinks: blinkCountRef.current });
               lastBlinkMsRef.current = now;
 
-              // Blink resets timer + alert
               lastBlinkAtRef.current = now;
               dispatch({ type: "SET_SECONDS", seconds: 0 });
               dispatch({ type: "ALERT_OFF" });
@@ -426,7 +427,6 @@ export default function Page() {
           }
         }
 
-        // Blinks/min (rate-limited to reduce re-renders)
         if (sessionStartRef.current === null) sessionStartRef.current = now;
         const minutes = (now - sessionStartRef.current) / 60000;
         const bpm = minutes > 0 ? blinkCountRef.current / minutes : 0;
@@ -437,7 +437,6 @@ export default function Page() {
         }
       });
 
-      // FaceMesh loop
       const loop = async () => {
         const v = videoRef.current;
         const c = hiddenCanvasRef.current;
@@ -454,9 +453,8 @@ export default function Page() {
       };
       rafRef.current = requestAnimationFrame(loop);
 
-      // Background monitor loop
       timerRef.current = window.setInterval(() => {
-        if (!baselineEarRef.current) return; // calibration not finished yet
+        if (!baselineEarRef.current) return;
 
         const now = performance.now();
         const last = lastBlinkAtRef.current ?? now;
@@ -467,7 +465,6 @@ export default function Page() {
         if (sec >= noBlinkThreshold) {
           dispatch({ type: "ALERT_ON" });
 
-          // fire notification on transition to alert (and cooldown)
           if (!lastAlertOnRef.current) {
             lastAlertOnRef.current = true;
             showAlertNotification();
@@ -500,14 +497,12 @@ export default function Page() {
     }
   }
 
-  // Keep notif permission in UI state
   useEffect(() => {
     if (!mounted) return;
     if (!("Notification" in window)) return;
     dispatch({ type: "SET_NOTIF_PERMISSION", perm: Notification.permission });
   }, [mounted]);
 
-  // Pause when tab is hidden
   useEffect(() => {
     const onVis = () => {
       if (document.hidden && running) stop();
@@ -538,7 +533,6 @@ export default function Page() {
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
       <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
 
-      {/* POPUP OVERLAY when alarm is on */}
       {running && !calibrating && alertOn && (
         <div
           role="dialog"
@@ -615,7 +609,10 @@ export default function Page() {
             By clicking “I agree”, you acknowledge that you understand these limitations.
           </p>
 
-          <button onClick={() => dispatch({ type: "AGREE" })} style={{ marginTop: 10, padding: "8px 14px", cursor: "pointer" }}>
+          <button
+            onClick={() => dispatch({ type: "AGREE" })}
+            style={{ marginTop: 10, padding: "8px 14px", cursor: "pointer" }}
+          >
             I agree
           </button>
         </div>
@@ -659,7 +656,6 @@ export default function Page() {
           </label>
         </div>
 
-        {/* Notification controls */}
         <div style={{ marginLeft: 8 }}>
           <label style={{ opacity: 0.9 }}>
             <input
@@ -673,17 +669,24 @@ export default function Page() {
           </label>
 
           {canUseNotifications && notifEnabled && notifPermission !== "granted" && (
-            <button onClick={requestNotifPermission} style={{ marginLeft: 10, padding: "6px 10px", cursor: "pointer" }}>
+            <button
+              onClick={requestNotifPermission}
+              style={{ marginLeft: 10, padding: "6px 10px", cursor: "pointer" }}
+            >
               Enable notifications
             </button>
           )}
 
           {!canUseNotifications && (
-            <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.7 }}>(Notifications not supported in this browser)</span>
+            <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.7 }}>
+              (Notifications not supported in this browser)
+            </span>
           )}
 
           {canUseNotifications && notifPermission === "denied" && (
-            <span style={{ marginLeft: 10, fontSize: 12, color: "#ffcc66" }}>(Permission denied in browser settings)</span>
+            <span style={{ marginLeft: 10, fontSize: 12, color: "#ffcc66" }}>
+              (Permission denied in browser settings)
+            </span>
           )}
         </div>
       </div>
