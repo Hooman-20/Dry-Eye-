@@ -273,17 +273,11 @@ export default function Page() {
   try {
     const perm = await Notification.requestPermission();
     dispatch({ type: "SET_NOTIF_PERMISSION", perm });
-
-    // Test notification immediately
-    if (perm === "granted") {
-      new Notification("Notifications enabled", {
-        body: "You will get an alert when you stop blinking."
-      });
-    }
   } catch {
     // ignore
   }
 }
+
 
 
   function setNoBlinkAlert(seconds: number) {
