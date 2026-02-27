@@ -216,6 +216,28 @@ export default function Page() {
   const lastBpmUpdateRef = useRef(0);
   const BPM_UPDATE_MS = 400;
 
+  /* -------------------- localStorage: load once -------------------- */
+  useEffect(() => {
+    if (!mounted) return;
+
+    try {
+      const savedThreshold = localStorage.getItem("noBlinkThreshold");
+      if (savedThreshold) {
+        const n = Number(savedThreshold);
+        if (Number.isFinite(n) && n > 0) {
+          dispatch({ type: "SET_THRESHOLD", seconds: n });
+        }
+      }
+
+      const savedNotif = localStorage.getItem("notifEnabled");
+      if (savedNotif !== null) {
+        dispatch({ type: "SET_NOTIF_ENABLED", enabled: savedNotif === "true" });
+      }
+    } catch {
+      // ignore
+    }
+  }, [mounted]);
+
   function beep() {
     const AudioCtx =
       (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
@@ -256,7 +278,6 @@ export default function Page() {
       const perm = await Notification.requestPermission();
       dispatch({ type: "SET_NOTIF_PERMISSION", perm });
 
-      // quick sanity test
       if (perm === "granted") {
         try {
           new Notification("Notifications enabled", {
@@ -288,6 +309,12 @@ export default function Page() {
 
   function setNoBlinkAlert(seconds: number) {
     dispatch({ type: "SET_THRESHOLD", seconds });
+
+    if (mounted) {
+      try {
+        localStorage.setItem("noBlinkThreshold", String(seconds));
+      } catch {}
+    }
   }
 
   function resetRefs() {
@@ -497,12 +524,14 @@ export default function Page() {
     }
   }
 
+  // Keep notif permission in UI state
   useEffect(() => {
     if (!mounted) return;
     if (!("Notification" in window)) return;
     dispatch({ type: "SET_NOTIF_PERMISSION", perm: Notification.permission });
   }, [mounted]);
 
+  // Pause when tab is hidden
   useEffect(() => {
     const onVis = () => {
       if (document.hidden && running) stop();
@@ -610,7 +639,10 @@ export default function Page() {
           </p>
 
           <button
-            onClick={() => dispatch({ type: "AGREE" })}
+            onClick={() => {
+              dispatch({ type: "AGREE" });
+              requestNotifPermission();
+            }}
             style={{ marginTop: 10, padding: "8px 14px", cursor: "pointer" }}
           >
             I agree
@@ -661,7 +693,16 @@ export default function Page() {
             <input
               type="checkbox"
               checked={notifEnabled}
-              onChange={(e) => dispatch({ type: "SET_NOTIF_ENABLED", enabled: e.target.checked })}
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                dispatch({ type: "SET_NOTIF_ENABLED", enabled });
+
+                if (mounted) {
+                  try {
+                    localStorage.setItem("notifEnabled", String(enabled));
+                  } catch {}
+                }
+              }}
               disabled={!canUseNotifications}
               style={{ marginRight: 8 }}
             />
@@ -692,7 +733,14 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <video ref={videoRef} muted playsInline width={640} height={480} style={{ borderRadius: 10, background: "#111" }} />
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          width={640}
+          height={480}
+          style={{ borderRadius: 10, background: "#111" }}
+        />
         <canvas ref={hiddenCanvasRef} style={{ display: "none" }} />
       </div>
 
