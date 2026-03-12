@@ -11,6 +11,14 @@ export {};
 
 type Point = { x: number; y: number };
 
+type SessionSummary = {
+  totalBlinks: number;
+  totalVisibleTimeMs: number;
+  totalHiddenTimeMs: number;
+  totalSessionTimeMs: number;
+  averageBlinksPerMinute: number;
+};
+
 function dist(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -55,6 +63,7 @@ type UiState = {
   error: string | null;
   notifEnabled: boolean;
   notifPermission: "default" | "granted" | "denied";
+  faceDetected: boolean;
 };
 
 type Action =
@@ -71,7 +80,8 @@ type Action =
   | { type: "ERROR"; message: string }
   | { type: "CLEAR_ERROR" }
   | { type: "SET_NOTIF_ENABLED"; enabled: boolean }
-  | { type: "SET_NOTIF_PERMISSION"; perm: "default" | "granted" | "denied" };
+  | { type: "SET_NOTIF_PERMISSION"; perm: "default" | "granted" | "denied" }
+  | { type: "SET_FACE_DETECTED"; detected: boolean };
 
 const initialState: UiState = {
   running: false,
@@ -85,6 +95,7 @@ const initialState: UiState = {
   error: null,
   notifEnabled: true,
   notifPermission: "default",
+  faceDetected: false,
 };
 
 function reducer(state: UiState, action: Action): UiState {
@@ -101,7 +112,7 @@ function reducer(state: UiState, action: Action): UiState {
       };
 
     case "STOP":
-      return { ...state, running: false, calibrating: false, alertOn: false };
+      return { ...state, running: false, calibrating: false, alertOn: false, faceDetected: false };
 
     case "CALIBRATION_DONE":
       return { ...state, calibrating: false, secondsSinceBlink: 0, alertOn: false };
@@ -128,7 +139,14 @@ function reducer(state: UiState, action: Action): UiState {
       return { ...state, agreed: true };
 
     case "ERROR":
-      return { ...state, error: action.message, running: false, calibrating: false, alertOn: false };
+      return {
+        ...state,
+        error: action.message,
+        running: false,
+        calibrating: false,
+        alertOn: false,
+        faceDetected: false,
+      };
 
     case "CLEAR_ERROR":
       return { ...state, error: null };
@@ -139,13 +157,26 @@ function reducer(state: UiState, action: Action): UiState {
     case "SET_NOTIF_PERMISSION":
       return { ...state, notifPermission: action.perm };
 
+    case "SET_FACE_DETECTED":
+      return { ...state, faceDetected: action.detected };
+
     default:
       return state;
   }
 }
 
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
+}
+
 export default function Page() {
   const [mounted, setMounted] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+
   useEffect(() => setMounted(true), []);
 
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -161,6 +192,7 @@ export default function Page() {
     error,
     notifEnabled,
     notifPermission,
+    faceDetected,
   } = state;
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -173,7 +205,6 @@ export default function Page() {
   const activeRef = useRef(false);
   const startingRef = useRef(false);
   const faceDetectedRef = useRef(false);
-  const faceMissingSinceRef = useRef<number | null>(null);
 
   const baselineEarRef = useRef<number | null>(null);
   const calibStartRef = useRef<number | null>(null);
@@ -184,11 +215,15 @@ export default function Page() {
   const closedFramesRef = useRef(0);
   const lastBlinkMsRef = useRef(0);
 
-  const lastBlinkAtRef = useRef<number | null>(null);
+  const lastBlinkVisibleTotalMsRef = useRef<number | null>(null);
   const lastAlertAtRef = useRef(0);
 
   const sessionStartRef = useRef<number | null>(null);
   const blinkCountRef = useRef(0);
+  const totalVisibleTimeMsRef = useRef(0);
+  const totalHiddenTimeMsRef = useRef(0);
+  const visibleSegmentStartRef = useRef<number | null>(null);
+  const hiddenSegmentStartRef = useRef<number | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
 
@@ -205,6 +240,46 @@ export default function Page() {
   const BPM_UPDATE_MS = 400;
 
   const lastBpmUpdateRef = useRef(0);
+
+  function getVisibleTotalMs(now: number) {
+    return (
+      totalVisibleTimeMsRef.current +
+      (visibleSegmentStartRef.current !== null ? now - visibleSegmentStartRef.current : 0)
+    );
+  }
+
+  function updateFaceVisibility(isFaceVisible: boolean, now: number) {
+    if (isFaceVisible === faceDetectedRef.current) return;
+
+    if (isFaceVisible) {
+      if (hiddenSegmentStartRef.current !== null) {
+        totalHiddenTimeMsRef.current += Math.max(0, now - hiddenSegmentStartRef.current);
+        hiddenSegmentStartRef.current = null;
+      }
+      visibleSegmentStartRef.current = now;
+    } else {
+      if (visibleSegmentStartRef.current !== null) {
+        totalVisibleTimeMsRef.current += Math.max(0, now - visibleSegmentStartRef.current);
+        visibleSegmentStartRef.current = null;
+      }
+      hiddenSegmentStartRef.current = now;
+    }
+
+    faceDetectedRef.current = isFaceVisible;
+    dispatch({ type: "SET_FACE_DETECTED", detected: isFaceVisible });
+  }
+
+  function finalizeTiming(now: number) {
+    if (visibleSegmentStartRef.current !== null) {
+      totalVisibleTimeMsRef.current += Math.max(0, now - visibleSegmentStartRef.current);
+      visibleSegmentStartRef.current = null;
+    }
+
+    if (hiddenSegmentStartRef.current !== null) {
+      totalHiddenTimeMsRef.current += Math.max(0, now - hiddenSegmentStartRef.current);
+      hiddenSegmentStartRef.current = null;
+    }
+  }
 
   useEffect(() => {
     if (!mounted) return;
@@ -316,18 +391,23 @@ export default function Page() {
     closedFramesRef.current = 0;
     lastBlinkMsRef.current = 0;
 
-    lastBlinkAtRef.current = null;
+    lastBlinkVisibleTotalMsRef.current = null;
     lastAlertAtRef.current = 0;
 
     sessionStartRef.current = null;
     blinkCountRef.current = 0;
+    totalVisibleTimeMsRef.current = 0;
+    totalHiddenTimeMsRef.current = 0;
+    visibleSegmentStartRef.current = null;
+    hiddenSegmentStartRef.current = null;
 
     lastBpmUpdateRef.current = 0;
 
     lastNotifAtRef.current = 0;
     lastAlertOnRef.current = false;
     faceDetectedRef.current = false;
-    faceMissingSinceRef.current = null;
+    dispatch({ type: "SET_FACE_DETECTED", detected: false });
+    dispatch({ type: "SET_SECONDS", seconds: 0 });
   }
 
   function cleanupLoopsAndStream() {
@@ -358,11 +438,16 @@ export default function Page() {
 
     dispatch({ type: "CLEAR_ERROR" });
     resetRefs();
+    setSessionSummary(null);
     dispatch({ type: "START" });
     activeRef.current = true;
 
     try {
       await loadScriptOnce("https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js");
+
+      const startNow = performance.now();
+      sessionStartRef.current = startNow;
+      hiddenSegmentStartRef.current = startNow;
 
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       streamRef.current = stream;
@@ -395,29 +480,13 @@ export default function Page() {
       mesh.onResults((res: any) => {
         if (!activeRef.current) return;
 
-        if (!res.multiFaceLandmarks?.length) {
-          if (faceDetectedRef.current && faceMissingSinceRef.current === null) {
-            faceMissingSinceRef.current = performance.now();
-          }
+        const now = performance.now();
+        const hasFace = !!res.multiFaceLandmarks?.length;
+        updateFaceVisibility(hasFace, now);
 
-          faceDetectedRef.current = false;
-          return;
-        }
-
-        if (!faceDetectedRef.current && faceMissingSinceRef.current !== null) {
-          const now = performance.now();
-
-          if (lastBlinkAtRef.current !== null) {
-            lastBlinkAtRef.current += now - faceMissingSinceRef.current;
-          }
-
-          faceMissingSinceRef.current = null;
-        }
-
-        faceDetectedRef.current = true;
+        if (!hasFace) return;
 
         const lm = res.multiFaceLandmarks[0] as Point[];
-        const now = performance.now();
 
         const L = { p1: 33, p2: 160, p3: 159, p4: 133, p5: 145, p6: 144 };
         const R = { p1: 362, p2: 387, p3: 386, p4: 263, p5: 374, p6: 373 };
@@ -437,8 +506,8 @@ export default function Page() {
             baselineEarRef.current =
               samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : maxEarRef.current;
 
+            lastBlinkVisibleTotalMsRef.current = getVisibleTotalMs(now);
             dispatch({ type: "CALIBRATION_DONE" });
-            lastBlinkAtRef.current = now;
             dispatch({ type: "SET_SECONDS", seconds: 0 });
             dispatch({ type: "ALERT_OFF" });
           }
@@ -465,8 +534,7 @@ export default function Page() {
               blinkCountRef.current += 1;
               dispatch({ type: "SET_BLINKS", blinks: blinkCountRef.current });
               lastBlinkMsRef.current = now;
-
-              lastBlinkAtRef.current = now;
+              lastBlinkVisibleTotalMsRef.current = getVisibleTotalMs(now);
               dispatch({ type: "SET_SECONDS", seconds: 0 });
               dispatch({ type: "ALERT_OFF" });
             }
@@ -476,9 +544,8 @@ export default function Page() {
           }
         }
 
-        if (sessionStartRef.current === null) sessionStartRef.current = now;
-        const minutes = (now - sessionStartRef.current) / 60000;
-        const bpm = minutes > 0 ? blinkCountRef.current / minutes : 0;
+        const visibleMinutes = getVisibleTotalMs(now) / 60000;
+        const bpm = visibleMinutes > 0 ? blinkCountRef.current / visibleMinutes : 0;
 
         if (now - lastBpmUpdateRef.current >= BPM_UPDATE_MS) {
           lastBpmUpdateRef.current = now;
@@ -512,18 +579,19 @@ export default function Page() {
       timerRef.current = window.setInterval(() => {
         if (!baselineEarRef.current) return;
 
+        const now = performance.now();
+        const lastBlinkVisible = lastBlinkVisibleTotalMsRef.current;
+        const visibleElapsedMs =
+          lastBlinkVisible === null ? 0 : Math.max(0, getVisibleTotalMs(now) - lastBlinkVisible);
+        const sec = visibleElapsedMs / 1000;
+
+        dispatch({ type: "SET_SECONDS", seconds: sec });
+
         if (!faceDetectedRef.current) {
           dispatch({ type: "ALERT_OFF" });
-          dispatch({ type: "SET_SECONDS", seconds: 0 });
           lastAlertOnRef.current = false;
           return;
         }
-
-        const now = performance.now();
-        const last = lastBlinkAtRef.current ?? now;
-        const sec = Math.max(0, (now - last) / 1000);
-
-        dispatch({ type: "SET_SECONDS", seconds: sec });
 
         if (sec >= noBlinkThreshold) {
           dispatch({ type: "ALERT_ON" });
@@ -553,6 +621,24 @@ export default function Page() {
   }
 
   function stop() {
+    const now = performance.now();
+    finalizeTiming(now);
+
+    const totalVisible = totalVisibleTimeMsRef.current;
+    const totalHidden = totalHiddenTimeMsRef.current;
+    const totalSessionTime =
+      sessionStartRef.current !== null ? Math.max(0, now - sessionStartRef.current) : totalVisible + totalHidden;
+    const averageBlinksPerMinute = totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
+
+    const summary: SessionSummary = {
+      totalBlinks: blinkCountRef.current,
+      totalVisibleTimeMs: totalVisible,
+      totalHiddenTimeMs: totalHidden,
+      totalSessionTimeMs: totalSessionTime,
+      averageBlinksPerMinute,
+    };
+
+    setSessionSummary(summary);
     dispatch({ type: "STOP" });
     cleanupLoopsAndStream();
 
@@ -572,6 +658,7 @@ export default function Page() {
     const onVis = () => {
       if (document.hidden && running) stop();
     };
+
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [running]);
@@ -593,8 +680,8 @@ export default function Page() {
       ? "Press Start to begin."
       : calibrating
         ? "Calibrating… keep your eyes open for a few seconds."
-        : !faceDetectedRef.current
-          ? "No face detected."
+        : !faceDetected
+          ? "No face detected — alarm paused."
           : alertOn
             ? "BLINK! (alert repeats until you blink)"
             : "Monitoring…";
@@ -695,7 +782,13 @@ export default function Page() {
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
         <button
-          onClick={() => (running ? stop() : start())}
+          onClick={() => {
+            if (running) {
+              stop();
+            } else {
+              void start();
+            }
+          }}
           style={{ padding: "8px 14px", cursor: agreed ? "pointer" : "not-allowed", opacity: agreed ? 1 : 0.5 }}
           disabled={!agreed}
         >
@@ -775,16 +868,91 @@ export default function Page() {
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <video
-          ref={videoRef}
-          muted
-          playsInline
-          width={640}
-          height={480}
-          style={{ borderRadius: 10, background: "#111" }}
-        />
-        <canvas ref={hiddenCanvasRef} style={{ display: "none" }} />
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
+        {sessionSummary && !running ? (
+          <div
+            style={{
+              width: "min(640px, 100%)",
+              minHeight: 480,
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 14,
+              padding: 24,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+            }}
+          >
+            <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>Session Summary</div>
+
+            <div style={{ lineHeight: 1.9, fontSize: 17 }}>
+              <div>
+                <b>Total blinks:</b> {sessionSummary.totalBlinks}
+              </div>
+              <div>
+                <b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}
+              </div>
+              <div>
+                <b>Total hidden time:</b> {formatDuration(sessionSummary.totalHiddenTimeMs)}
+              </div>
+              <div>
+                <b>Total session time:</b> {formatDuration(sessionSummary.totalSessionTimeMs)}
+              </div>
+              <div>
+                <b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  setSessionSummary(null);
+                }}
+                style={{ padding: "10px 16px", cursor: "pointer" }}
+              >
+                Close Summary
+              </button>
+
+              <button
+                onClick={() => {
+                  setSessionSummary(null);
+                  void start();
+                }}
+                style={{ padding: "10px 16px", cursor: "pointer" }}
+              >
+                Start New Session
+              </button>
+            </div>
+          </div>
+        ) : running ? (
+          <div>
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              width={640}
+              height={480}
+              style={{ borderRadius: 10, background: "#111" }}
+            />
+            <canvas ref={hiddenCanvasRef} style={{ display: "none" }} />
+          </div>
+        ) : (
+          <div
+            style={{
+              width: "min(640px, 100%)",
+              minHeight: 480,
+              borderRadius: 10,
+              background: "#111",
+              border: "1px solid #222",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: 0.8,
+            }}
+          >
+            Press Start to begin a new session.
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 14, lineHeight: 1.7 }}>
