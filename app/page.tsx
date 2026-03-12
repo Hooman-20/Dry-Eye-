@@ -1,4 +1,4 @@
-<div style={{ marginTop: 16 }}>
+<div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
   {sessionSummary && !running ? (
     <div
       style={{
