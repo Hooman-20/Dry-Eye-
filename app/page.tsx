@@ -53,11 +53,10 @@ type UiState = {
   blinksPerMin: number;
   secondsSinceBlink: number;
   alertOn: boolean;
-  noBlinkThreshold: number; // seconds
-  agreed: boolean; // user consent
+  noBlinkThreshold: number;
+  agreed: boolean;
   error: string | null;
 
-  // Notifications
   notifEnabled: boolean;
   notifPermission: "default" | "granted" | "denied";
 };
@@ -151,7 +150,6 @@ function reducer(state: UiState, action: Action): UiState {
 }
 
 export default function Page() {
-  // prevent hydration mismatch for Notification/window-dependent UI
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -176,6 +174,10 @@ export default function Page() {
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+  const meshRef = useRef<any>(null);
+  const activeRef = useRef(false);
+  const startingRef = useRef(false);
+  const faceDetectedRef = useRef(false);
 
   // Calibration
   const baselineEarRef = useRef<number | null>(null);
@@ -216,7 +218,6 @@ export default function Page() {
   const lastBpmUpdateRef = useRef(0);
   const BPM_UPDATE_MS = 400;
 
-  /* -------------------- localStorage: load once -------------------- */
   useEffect(() => {
     if (!mounted) return;
 
@@ -337,9 +338,12 @@ export default function Page() {
 
     lastNotifAtRef.current = 0;
     lastAlertOnRef.current = false;
+    faceDetectedRef.current = false;
   }
 
   function cleanupLoopsAndStream() {
+    activeRef.current = false;
+
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
 
@@ -350,14 +354,23 @@ export default function Page() {
       for (const t of streamRef.current.getTracks()) t.stop();
       streamRef.current = null;
     }
+
+    if (meshRef.current) {
+      try {
+        meshRef.current.close();
+      } catch {}
+      meshRef.current = null;
+    }
   }
 
   async function start() {
-    if (!agreed) return;
+    if (!agreed || running || startingRef.current) return;
+    startingRef.current = true;
 
     dispatch({ type: "CLEAR_ERROR" });
     resetRefs();
     dispatch({ type: "START" });
+    activeRef.current = true;
 
     try {
       await loadScriptOnce("https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js");
@@ -381,6 +394,7 @@ export default function Page() {
       const mesh = new FaceMesh({
         locateFile: (f: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`,
       });
+      meshRef.current = mesh;
 
       mesh.setOptions({
         maxNumFaces: 1,
@@ -390,7 +404,14 @@ export default function Page() {
       });
 
       mesh.onResults((res: any) => {
-        if (!res.multiFaceLandmarks?.length) return;
+        if (!activeRef.current) return;
+
+        if (!res.multiFaceLandmarks?.length) {
+          faceDetectedRef.current = false;
+          return;
+        }
+
+        faceDetectedRef.current = true;
 
         const lm = res.multiFaceLandmarks[0] as Point[];
         const now = performance.now();
@@ -402,7 +423,6 @@ export default function Page() {
         const right = ear(lm[R.p1], lm[R.p2], lm[R.p3], lm[R.p4], lm[R.p5], lm[R.p6]);
         const curEar = (left + right) / 2;
 
-        // calibration
         if (baselineEarRef.current === null) {
           if (calibStartRef.current === null) calibStartRef.current = now;
 
@@ -465,6 +485,8 @@ export default function Page() {
       });
 
       const loop = async () => {
+        if (!activeRef.current) return;
+
         const v = videoRef.current;
         const c = hiddenCanvasRef.current;
         if (!v || !c) return;
@@ -473,15 +495,26 @@ export default function Page() {
           c.width = v.videoWidth;
           c.height = v.videoHeight;
           ctx.drawImage(v, 0, 0, c.width, c.height);
-          await mesh.send({ image: c });
+
+          if (activeRef.current) {
+            await mesh.send({ image: c });
+          }
         }
 
-        rafRef.current = requestAnimationFrame(loop);
+        if (activeRef.current) {
+          rafRef.current = requestAnimationFrame(loop);
+        }
       };
       rafRef.current = requestAnimationFrame(loop);
 
       timerRef.current = window.setInterval(() => {
         if (!baselineEarRef.current) return;
+
+        if (!faceDetectedRef.current) {
+          dispatch({ type: "ALERT_OFF" });
+          lastAlertOnRef.current = false;
+          return;
+        }
 
         const now = performance.now();
         const last = lastBlinkAtRef.current ?? now;
@@ -511,6 +544,8 @@ export default function Page() {
     } catch (e: any) {
       cleanupLoopsAndStream();
       dispatch({ type: "ERROR", message: e?.message ?? "Failed to start." });
+    } finally {
+      startingRef.current = false;
     }
   }
 
@@ -524,14 +559,12 @@ export default function Page() {
     }
   }
 
-  // Keep notif permission in UI state
   useEffect(() => {
     if (!mounted) return;
     if (!("Notification" in window)) return;
     dispatch({ type: "SET_NOTIF_PERMISSION", perm: Notification.permission });
   }, [mounted]);
 
-  // Pause when tab is hidden
   useEffect(() => {
     const onVis = () => {
       if (document.hidden && running) stop();
@@ -542,8 +575,14 @@ export default function Page() {
   }, [running]);
 
   useEffect(() => {
-    return () => stop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cleanupLoopsAndStream();
+
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
   }, []);
 
   const statusText = error
@@ -640,8 +679,8 @@ export default function Page() {
 
           <button
             onClick={() => {
-              dispatch({ type: "AGREE" });
               requestNotifPermission();
+              dispatch({ type: "AGREE" });
             }}
             style={{ marginTop: 10, padding: "8px 14px", cursor: "pointer" }}
           >
