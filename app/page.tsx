@@ -869,62 +869,7 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
-        {sessionSummary && !running ? (
-          <div
-            style={{
-              width: "min(640px, 100%)",
-              minHeight: 480,
-              background: "#111",
-              border: "1px solid #333",
-              borderRadius: 14,
-              padding: 24,
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>Session Summary</div>
-
-            <div style={{ lineHeight: 1.9, fontSize: 17 }}>
-              <div>
-                <b>Total blinks:</b> {sessionSummary.totalBlinks}
-              </div>
-              <div>
-                <b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}
-              </div>
-              <div>
-                <b>Total hidden time:</b> {formatDuration(sessionSummary.totalHiddenTimeMs)}
-              </div>
-              <div>
-                <b>Total session time:</b> {formatDuration(sessionSummary.totalSessionTimeMs)}
-              </div>
-              <div>
-                <b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
-              <button
-                onClick={() => {
-                  setSessionSummary(null);
-                }}
-                style={{ padding: "10px 16px", cursor: "pointer" }}
-              >
-                Close Summary
-              </button>
-
-              <button
-                onClick={() => {
-                  setSessionSummary(null);
-                  void start();
-                }}
-                style={{ padding: "10px 16px", cursor: "pointer" }}
-              >
-                Start New Session
-              </button>
-            </div>
-          </div>
-        ) : running ? (
+        {running ? (
           <div>
             <video
               ref={videoRef}
@@ -966,6 +911,58 @@ export default function Page() {
           <b>Seconds since last blink:</b> {secondsSinceBlink.toFixed(1)}
         </div>
         <div style={{ opacity: 0.75 }}>Tip: if you don’t hear sound, click once on the page (browser audio rule).</div>
+
+        {sessionSummary && !running && (
+          <div
+            style={{
+              marginTop: 20,
+              width: "min(640px, 100%)",
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 14,
+              padding: 20,
+            }}
+          >
+            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>Session Summary</div>
+
+            <div style={{ lineHeight: 1.8 }}>
+              <div>
+                <b>Total blinks:</b> {sessionSummary.totalBlinks}
+              </div>
+              <div>
+                <b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}
+              </div>
+              <div>
+                <b>Total hidden time:</b> {formatDuration(sessionSummary.totalHiddenTimeMs)}
+              </div>
+              <div>
+                <b>Total session time:</b> {formatDuration(sessionSummary.totalSessionTimeMs)}
+              </div>
+              <div>
+                <b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+              <button
+                onClick={() => setSessionSummary(null)}
+                style={{ padding: "8px 14px", cursor: "pointer" }}
+              >
+                Close Summary
+              </button>
+
+              <button
+                onClick={() => {
+                  setSessionSummary(null);
+                  void start();
+                }}
+                style={{ padding: "8px 14px", cursor: "pointer" }}
+              >
+                Start New Session
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
