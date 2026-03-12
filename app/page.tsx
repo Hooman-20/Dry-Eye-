@@ -780,7 +780,7 @@ export default function Page() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
+      <div style={{ marginTop: 16 }}>
         <button
           onClick={() => {
             if (running) {
