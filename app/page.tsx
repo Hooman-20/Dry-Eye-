@@ -15,7 +15,6 @@ function dist(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-// Eye Aspect Ratio (EAR)
 function ear(p1: Point, p2: Point, p3: Point, p4: Point, p5: Point, p6: Point) {
   const denom = 2 * dist(p1, p4);
   if (denom <= 1e-6) return 0;
@@ -44,8 +43,6 @@ function loadScriptOnce(src: string) {
   });
 }
 
-/* -------------------- Reducer -------------------- */
-
 type UiState = {
   running: boolean;
   calibrating: boolean;
@@ -56,7 +53,6 @@ type UiState = {
   noBlinkThreshold: number;
   agreed: boolean;
   error: string | null;
-
   notifEnabled: boolean;
   notifPermission: "default" | "granted" | "denied";
 };
@@ -87,7 +83,6 @@ const initialState: UiState = {
   noBlinkThreshold: 10,
   agreed: false,
   error: null,
-
   notifEnabled: true,
   notifPermission: "default",
 };
@@ -178,45 +173,38 @@ export default function Page() {
   const activeRef = useRef(false);
   const startingRef = useRef(false);
   const faceDetectedRef = useRef(false);
+  const faceMissingSinceRef = useRef<number | null>(null);
 
-  // Calibration
   const baselineEarRef = useRef<number | null>(null);
   const calibStartRef = useRef<number | null>(null);
   const maxEarRef = useRef(0);
   const openSamplesRef = useRef<number[]>([]);
 
-  // Blink detection
   const eyeStateRef = useRef<"OPEN" | "CLOSED">("OPEN");
   const closedFramesRef = useRef(0);
   const lastBlinkMsRef = useRef(0);
 
-  // Monitoring
   const lastBlinkAtRef = useRef<number | null>(null);
   const lastAlertAtRef = useRef(0);
 
-  // Stats
   const sessionStartRef = useRef<number | null>(null);
   const blinkCountRef = useRef(0);
 
-  // Audio
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Notifications
   const lastNotifAtRef = useRef(0);
   const lastAlertOnRef = useRef(false);
   const NOTIF_COOLDOWN_MS = 5000;
 
-  // Tunables
   const CALIBRATION_MS = 3000;
   const CLOSE_RATIO = 0.62;
   const OPEN_RATIO = 0.82;
   const MIN_CLOSED_FRAMES = 2;
   const MIN_BLINK_GAP_MS = 350;
-
   const ALERT_REPEAT_MS = 2000;
+  const BPM_UPDATE_MS = 400;
 
   const lastBpmUpdateRef = useRef(0);
-  const BPM_UPDATE_MS = 400;
 
   useEffect(() => {
     if (!mounted) return;
@@ -339,6 +327,7 @@ export default function Page() {
     lastNotifAtRef.current = 0;
     lastAlertOnRef.current = false;
     faceDetectedRef.current = false;
+    faceMissingSinceRef.current = null;
   }
 
   function cleanupLoopsAndStream() {
@@ -407,8 +396,22 @@ export default function Page() {
         if (!activeRef.current) return;
 
         if (!res.multiFaceLandmarks?.length) {
+          if (faceDetectedRef.current && faceMissingSinceRef.current === null) {
+            faceMissingSinceRef.current = performance.now();
+          }
+
           faceDetectedRef.current = false;
           return;
+        }
+
+        if (!faceDetectedRef.current && faceMissingSinceRef.current !== null) {
+          const now = performance.now();
+
+          if (lastBlinkAtRef.current !== null) {
+            lastBlinkAtRef.current += now - faceMissingSinceRef.current;
+          }
+
+          faceMissingSinceRef.current = null;
         }
 
         faceDetectedRef.current = true;
@@ -435,7 +438,6 @@ export default function Page() {
               samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : maxEarRef.current;
 
             dispatch({ type: "CALIBRATION_DONE" });
-
             lastBlinkAtRef.current = now;
             dispatch({ type: "SET_SECONDS", seconds: 0 });
             dispatch({ type: "ALERT_OFF" });
@@ -512,6 +514,7 @@ export default function Page() {
 
         if (!faceDetectedRef.current) {
           dispatch({ type: "ALERT_OFF" });
+          dispatch({ type: "SET_SECONDS", seconds: 0 });
           lastAlertOnRef.current = false;
           return;
         }
@@ -571,7 +574,6 @@ export default function Page() {
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
   useEffect(() => {
@@ -591,9 +593,11 @@ export default function Page() {
       ? "Press Start to begin."
       : calibrating
         ? "Calibrating… keep your eyes open for a few seconds."
-        : alertOn
-          ? "BLINK! (alert repeats until you blink)"
-          : "Monitoring…";
+        : !faceDetectedRef.current
+          ? "No face detected."
+          : alertOn
+            ? "BLINK! (alert repeats until you blink)"
+            : "Monitoring…";
 
   const canUseNotifications = mounted && "Notification" in window;
 
