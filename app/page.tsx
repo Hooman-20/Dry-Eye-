@@ -23,7 +23,7 @@ type SessionSummary = {
   visibilityPercent: number;
   blinkCompliancePercent: number;
 
-  score: number;
+  score: number | null;
   grade: string;
   gradeReason: string;
 };
@@ -199,15 +199,22 @@ function gradeSession(args: {
   const visibleMinutes = visibleMs / 60000;
   const longestNoBlinkSec = longestNoBlinkMs / 1000;
 
+  if (visibleMinutes < 0.5) {
+    return {
+      score: null,
+      grade: "N/A",
+      gradeReason: "could not determine grade because visible session time was too short",
+      visibilityPercent,
+      blinkCompliancePercent,
+    };
+  }
+
   let score = 100;
   const reasons: string[] = [];
 
-  if (visibleMinutes < 0.5) {
-    score -= 25;
-    reasons.push("session too short");
-  } else if (visibleMinutes < 1) {
+  if (visibleMinutes < 1) {
     score -= 10;
-    reasons.push("very short visible time");
+    reasons.push("limited session length");
   }
 
   if (bpm >= 15 && bpm <= 25) {
@@ -1079,7 +1086,7 @@ export default function Page() {
                 <b>Blink compliance:</b> {sessionSummary.blinkCompliancePercent.toFixed(1)}%
               </div>
               <div>
-                <b>Session score:</b> {sessionSummary.score}/100
+                <b>Session score:</b> {sessionSummary.score === null ? "N/A" : `${sessionSummary.score}/100`}
               </div>
               <div>
                 <b>Grade:</b> {sessionSummary.grade}
