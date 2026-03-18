@@ -1,37 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Blink Monitor (Webcam)
 
-## Getting Started
+A browser-based research prototype that uses your webcam to detect blinks, monitor time since the last blink, and alert you when no blink is detected for a selected period.
 
-First, run the development server:
+## Live Demo
 
-```bash
+[Try the app here](https://dry-eye-efmy.vercel.app)
 
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Overview
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Blink Monitor is a webcam-based tool designed to help users become more aware of their blinking behavior during screen use. The app tracks blinks in real time, estimates blinks per minute, detects long no-blink periods, and provides audio and desktop notification alerts when needed.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+This project is intended for research and educational purposes only. It is not a medical device and should not be used for diagnosis or treatment.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Features
 
-## Learn More
+- Real-time blink detection using webcam input
+- Automatic eye calibration at the start of each session
+- Live blink counter
+- Blinks-per-minute tracking
+- Time since last blink display
+- Configurable no-blink alert threshold
+- Repeating alarm until a blink is detected
+- Optional desktop notifications
+- Face detection awareness so alerts pause when no face is visible
+- Session summary after each run
+- Session grading based on blinking behavior and session quality
 
-To learn more about Next.js, take a look at the following resources:
+## How It Works
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The app uses the webcam to capture video and detect facial landmarks. It estimates whether the eyes are open or closed by measuring eye geometry frame by frame. After a short calibration period, the system begins monitoring blinking activity.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+During a session, the app tracks:
 
-## Deploy on Vercel
+- total blinks
+- average blinks per minute
+- seconds since last blink
+- visible vs hidden session time
+- number of no-blink alerts
+- longest no-blink streak
+- session score and grade
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+If the user does not blink for longer than the selected threshold, the app triggers an alert and can also send a desktop notification if permission is enabled.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tech Stack
+
+- Next.js
+- React
+- TypeScript
+- MediaPipe Face Mesh
+- Web Notifications API
+- Web Audio API
+- Vercel for deployment
+
+## Research Disclaimer
+
+This project is a research prototype and not a medical device. Results are experimental and may not be accurate.
+
+If you experience eye pain, discomfort, or vision issues, stop using the tool and contact a qualified medical professional.
+
