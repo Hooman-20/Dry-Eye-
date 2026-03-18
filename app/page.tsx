@@ -17,6 +17,15 @@ type SessionSummary = {
   totalHiddenTimeMs: number;
   totalSessionTimeMs: number;
   averageBlinksPerMinute: number;
+
+  totalAlerts: number;
+  longestNoBlinkMs: number;
+  visibilityPercent: number;
+  blinkCompliancePercent: number;
+
+  score: number;
+  grade: string;
+  gradeReason: string;
 };
 
 function dist(a: Point, b: Point) {
@@ -173,6 +182,111 @@ function formatDuration(ms: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
+function gradeSession(args: {
+  visibleMs: number;
+  hiddenMs: number;
+  totalMs: number;
+  blinks: number;
+  bpm: number;
+  alerts: number;
+  longestNoBlinkMs: number;
+  riskyVisibleMs: number;
+}) {
+  const { visibleMs, totalMs, bpm, alerts, longestNoBlinkMs, riskyVisibleMs } = args;
+
+  const visibilityPercent = totalMs > 0 ? (visibleMs / totalMs) * 100 : 0;
+  const blinkCompliancePercent = visibleMs > 0 ? ((visibleMs - riskyVisibleMs) / visibleMs) * 100 : 0;
+  const visibleMinutes = visibleMs / 60000;
+  const longestNoBlinkSec = longestNoBlinkMs / 1000;
+
+  let score = 100;
+  const reasons: string[] = [];
+
+  if (visibleMinutes < 0.5) {
+    score -= 25;
+    reasons.push("session too short");
+  } else if (visibleMinutes < 1) {
+    score -= 10;
+    reasons.push("very short visible time");
+  }
+
+  if (bpm >= 15 && bpm <= 25) {
+    // ideal range
+  } else if ((bpm >= 10 && bpm < 15) || (bpm > 25 && bpm <= 30)) {
+    score -= 10;
+    reasons.push("blink rate slightly outside target range");
+  } else if ((bpm >= 7 && bpm < 10) || (bpm > 30 && bpm <= 35)) {
+    score -= 20;
+    reasons.push("blink rate outside healthy target range");
+  } else {
+    score -= 35;
+    reasons.push("blink rate far from target range");
+  }
+
+  if (alerts === 0) {
+    // no penalty
+  } else if (alerts <= 2) {
+    score -= 8;
+    reasons.push("a few no-blink alerts");
+  } else if (alerts <= 5) {
+    score -= 18;
+    reasons.push("multiple no-blink alerts");
+  } else {
+    score -= 30;
+    reasons.push("frequent no-blink alerts");
+  }
+
+  if (longestNoBlinkSec <= 10) {
+    // no penalty
+  } else if (longestNoBlinkSec <= 15) {
+    score -= 8;
+    reasons.push("one longer no-blink streak");
+  } else if (longestNoBlinkSec <= 20) {
+    score -= 15;
+    reasons.push("long no-blink streak");
+  } else {
+    score -= 25;
+    reasons.push("very long no-blink streak");
+  }
+
+  if (visibilityPercent < 60) {
+    score -= 20;
+    reasons.push("face not visible for much of session");
+  } else if (visibilityPercent < 80) {
+    score -= 8;
+    reasons.push("face visibility could be more consistent");
+  }
+
+  if (blinkCompliancePercent < 70) {
+    score -= 18;
+    reasons.push("too much time spent above the no-blink threshold");
+  } else if (blinkCompliancePercent < 85) {
+    score -= 8;
+    reasons.push("some extended no-blink periods");
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  let grade = "F";
+  if (score >= 90) grade = "A";
+  else if (score >= 80) grade = "B";
+  else if (score >= 70) grade = "C";
+  else if (score >= 60) grade = "D";
+
+  const gradeReason =
+    reasons.length > 0
+      ? reasons.join(", ")
+      : "steady blinking, good face visibility, and no alert issues";
+
+  return {
+    score,
+    grade,
+    gradeReason,
+    visibilityPercent,
+    blinkCompliancePercent,
+  };
+}
+
 export default function Page() {
   const [mounted, setMounted] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
@@ -224,6 +338,11 @@ export default function Page() {
   const totalHiddenTimeMsRef = useRef(0);
   const visibleSegmentStartRef = useRef<number | null>(null);
   const hiddenSegmentStartRef = useRef<number | null>(null);
+
+  const alertCountRef = useRef(0);
+  const longestNoBlinkMsRef = useRef(0);
+  const riskyVisibleTimeMsRef = useRef(0);
+  const lastTimerTickMsRef = useRef<number | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
 
@@ -400,6 +519,11 @@ export default function Page() {
     totalHiddenTimeMsRef.current = 0;
     visibleSegmentStartRef.current = null;
     hiddenSegmentStartRef.current = null;
+
+    alertCountRef.current = 0;
+    longestNoBlinkMsRef.current = 0;
+    riskyVisibleTimeMsRef.current = 0;
+    lastTimerTickMsRef.current = null;
 
     lastBpmUpdateRef.current = 0;
 
@@ -580,10 +704,18 @@ export default function Page() {
         if (!baselineEarRef.current) return;
 
         const now = performance.now();
+        const lastTick = lastTimerTickMsRef.current ?? now;
+        const deltaMs = Math.max(0, now - lastTick);
+        lastTimerTickMsRef.current = now;
+
         const lastBlinkVisible = lastBlinkVisibleTotalMsRef.current;
         const visibleElapsedMs =
           lastBlinkVisible === null ? 0 : Math.max(0, getVisibleTotalMs(now) - lastBlinkVisible);
         const sec = visibleElapsedMs / 1000;
+
+        if (visibleElapsedMs > longestNoBlinkMsRef.current) {
+          longestNoBlinkMsRef.current = visibleElapsedMs;
+        }
 
         dispatch({ type: "SET_SECONDS", seconds: sec });
 
@@ -594,10 +726,12 @@ export default function Page() {
         }
 
         if (sec >= noBlinkThreshold) {
+          riskyVisibleTimeMsRef.current += deltaMs;
           dispatch({ type: "ALERT_ON" });
 
           if (!lastAlertOnRef.current) {
             lastAlertOnRef.current = true;
+            alertCountRef.current += 1;
             showAlertNotification();
           } else {
             showAlertNotification();
@@ -630,12 +764,32 @@ export default function Page() {
       sessionStartRef.current !== null ? Math.max(0, now - sessionStartRef.current) : totalVisible + totalHidden;
     const averageBlinksPerMinute = totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
 
+    const grading = gradeSession({
+      visibleMs: totalVisible,
+      hiddenMs: totalHidden,
+      totalMs: totalSessionTime,
+      blinks: blinkCountRef.current,
+      bpm: averageBlinksPerMinute,
+      alerts: alertCountRef.current,
+      longestNoBlinkMs: longestNoBlinkMsRef.current,
+      riskyVisibleMs: riskyVisibleTimeMsRef.current,
+    });
+
     const summary: SessionSummary = {
       totalBlinks: blinkCountRef.current,
       totalVisibleTimeMs: totalVisible,
       totalHiddenTimeMs: totalHidden,
       totalSessionTimeMs: totalSessionTime,
       averageBlinksPerMinute,
+
+      totalAlerts: alertCountRef.current,
+      longestNoBlinkMs: longestNoBlinkMsRef.current,
+      visibilityPercent: grading.visibilityPercent,
+      blinkCompliancePercent: grading.blinkCompliancePercent,
+
+      score: grading.score,
+      grade: grading.grade,
+      gradeReason: grading.gradeReason,
     };
 
     setSessionSummary(summary);
@@ -872,7 +1026,7 @@ export default function Page() {
         {sessionSummary && !running ? (
           <div
             style={{
-              width: "min(640px, 100%)",
+              width: "min(700px, 100%)",
               minHeight: 480,
               background: "#111",
               border: "1px solid #333",
@@ -890,6 +1044,9 @@ export default function Page() {
                 <b>Total blinks:</b> {sessionSummary.totalBlinks}
               </div>
               <div>
+                <b>Total alerts:</b> {sessionSummary.totalAlerts}
+              </div>
+              <div>
                 <b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}
               </div>
               <div>
@@ -900,6 +1057,24 @@ export default function Page() {
               </div>
               <div>
                 <b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}
+              </div>
+              <div>
+                <b>Longest no-blink streak:</b> {formatDuration(sessionSummary.longestNoBlinkMs)}
+              </div>
+              <div>
+                <b>Face visibility:</b> {sessionSummary.visibilityPercent.toFixed(1)}%
+              </div>
+              <div>
+                <b>Blink compliance:</b> {sessionSummary.blinkCompliancePercent.toFixed(1)}%
+              </div>
+              <div>
+                <b>Session score:</b> {sessionSummary.score}/100
+              </div>
+              <div>
+                <b>Grade:</b> {sessionSummary.grade}
+              </div>
+              <div>
+                <b>Why:</b> {sessionSummary.gradeReason}
               </div>
             </div>
 
