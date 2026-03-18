@@ -319,6 +319,7 @@ export default function Page() {
   const activeRef = useRef(false);
   const startingRef = useRef(false);
   const faceDetectedRef = useRef(false);
+  const faceMissingSinceRef = useRef<number | null>(null);
 
   const baselineEarRef = useRef<number | null>(null);
   const calibStartRef = useRef<number | null>(null);
@@ -355,6 +356,7 @@ export default function Page() {
   const OPEN_RATIO = 0.82;
   const MIN_CLOSED_FRAMES = 2;
   const MIN_BLINK_GAP_MS = 350;
+  const FACE_LOST_DEBOUNCE_MS = 300;
   const ALERT_REPEAT_MS = 2000;
   const BPM_UPDATE_MS = 400;
 
@@ -530,6 +532,7 @@ export default function Page() {
     lastNotifAtRef.current = 0;
     lastAlertOnRef.current = false;
     faceDetectedRef.current = false;
+    faceMissingSinceRef.current = null;
     dispatch({ type: "SET_FACE_DETECTED", detected: false });
     dispatch({ type: "SET_SECONDS", seconds: 0 });
   }
@@ -606,7 +609,24 @@ export default function Page() {
 
         const now = performance.now();
         const hasFace = !!res.multiFaceLandmarks?.length;
-        updateFaceVisibility(hasFace, now);
+
+        if (hasFace) {
+          faceMissingSinceRef.current = null;
+
+          if (!faceDetectedRef.current) {
+            updateFaceVisibility(true, now);
+          }
+        } else {
+          if (faceMissingSinceRef.current === null) {
+            faceMissingSinceRef.current = now;
+          }
+
+          if (now - faceMissingSinceRef.current >= FACE_LOST_DEBOUNCE_MS) {
+            if (faceDetectedRef.current) {
+              updateFaceVisibility(false, now);
+            }
+          }
+        }
 
         if (!hasFace) return;
 
