@@ -314,7 +314,6 @@ export default function Page() {
 
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
-  const timerRef = useRef<number | null>(null);
   const meshRef = useRef<any>(null);
   const activeRef = useRef(false);
   const startingRef = useRef(false);
@@ -332,6 +331,7 @@ export default function Page() {
 
   const lastBlinkVisibleTotalMsRef = useRef<number | null>(null);
   const lastAlertAtRef = useRef(0);
+  const lastMetricsUpdateMsRef = useRef<number | null>(null);
 
   const sessionStartRef = useRef<number | null>(null);
   const blinkCountRef = useRef(0);
@@ -343,7 +343,6 @@ export default function Page() {
   const alertCountRef = useRef(0);
   const longestNoBlinkMsRef = useRef(0);
   const riskyVisibleTimeMsRef = useRef(0);
-  const lastTimerTickMsRef = useRef<number | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
 
@@ -514,6 +513,7 @@ export default function Page() {
 
     lastBlinkVisibleTotalMsRef.current = null;
     lastAlertAtRef.current = 0;
+    lastMetricsUpdateMsRef.current = null;
 
     sessionStartRef.current = null;
     blinkCountRef.current = 0;
@@ -525,7 +525,6 @@ export default function Page() {
     alertCountRef.current = 0;
     longestNoBlinkMsRef.current = 0;
     riskyVisibleTimeMsRef.current = 0;
-    lastTimerTickMsRef.current = null;
 
     lastBpmUpdateRef.current = 0;
 
@@ -533,8 +532,10 @@ export default function Page() {
     lastAlertOnRef.current = false;
     faceDetectedRef.current = false;
     faceMissingSinceRef.current = null;
+
     dispatch({ type: "SET_FACE_DETECTED", detected: false });
     dispatch({ type: "SET_SECONDS", seconds: 0 });
+    dispatch({ type: "ALERT_OFF" });
   }
 
   function cleanupLoopsAndStream() {
@@ -542,9 +543,6 @@ export default function Page() {
 
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
-
-    if (timerRef.current) window.clearInterval(timerRef.current);
-    timerRef.current = null;
 
     if (streamRef.current) {
       for (const t of streamRef.current.getTracks()) t.stop();
@@ -608,6 +606,10 @@ export default function Page() {
         if (!activeRef.current) return;
 
         const now = performance.now();
+        const prevMetricsNow = lastMetricsUpdateMsRef.current;
+        const deltaMs = prevMetricsNow === null ? 0 : Math.max(0, now - prevMetricsNow);
+        lastMetricsUpdateMsRef.current = now;
+
         const hasFace = !!res.multiFaceLandmarks?.length;
 
         if (hasFace) {
@@ -625,10 +627,12 @@ export default function Page() {
             if (faceDetectedRef.current) {
               updateFaceVisibility(false, now);
             }
+            dispatch({ type: "ALERT_OFF" });
+            lastAlertOnRef.current = false;
           }
-        }
 
-        if (!hasFace) return;
+          return;
+        }
 
         const lm = res.multiFaceLandmarks[0] as Point[];
 
@@ -651,10 +655,12 @@ export default function Page() {
               samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : maxEarRef.current;
 
             lastBlinkVisibleTotalMsRef.current = getVisibleTotalMs(now);
+            lastMetricsUpdateMsRef.current = now;
             dispatch({ type: "CALIBRATION_DONE" });
             dispatch({ type: "SET_SECONDS", seconds: 0 });
             dispatch({ type: "ALERT_OFF" });
           }
+
           return;
         }
 
@@ -681,11 +687,43 @@ export default function Page() {
               lastBlinkVisibleTotalMsRef.current = getVisibleTotalMs(now);
               dispatch({ type: "SET_SECONDS", seconds: 0 });
               dispatch({ type: "ALERT_OFF" });
+              lastAlertOnRef.current = false;
             }
 
             eyeStateRef.current = "OPEN";
             closedFramesRef.current = 0;
           }
+        }
+
+        const visibleElapsedMs =
+          lastBlinkVisibleTotalMsRef.current === null
+            ? 0
+            : Math.max(0, getVisibleTotalMs(now) - lastBlinkVisibleTotalMsRef.current);
+
+        if (visibleElapsedMs > longestNoBlinkMsRef.current) {
+          longestNoBlinkMsRef.current = visibleElapsedMs;
+        }
+
+        const sec = visibleElapsedMs / 1000;
+        dispatch({ type: "SET_SECONDS", seconds: sec });
+
+        if (sec >= noBlinkThreshold) {
+          riskyVisibleTimeMsRef.current += deltaMs;
+          dispatch({ type: "ALERT_ON" });
+
+          if (!lastAlertOnRef.current) {
+            lastAlertOnRef.current = true;
+            alertCountRef.current += 1;
+            showAlertNotification();
+          }
+
+          if (now - lastAlertAtRef.current >= ALERT_REPEAT_MS) {
+            lastAlertAtRef.current = now;
+            beep();
+          }
+        } else {
+          dispatch({ type: "ALERT_OFF" });
+          lastAlertOnRef.current = false;
         }
 
         const visibleMinutes = getVisibleTotalMs(now) / 60000;
@@ -719,53 +757,6 @@ export default function Page() {
         }
       };
       rafRef.current = requestAnimationFrame(loop);
-
-      timerRef.current = window.setInterval(() => {
-        if (!baselineEarRef.current) return;
-
-        const now = performance.now();
-        const lastTick = lastTimerTickMsRef.current ?? now;
-        const deltaMs = Math.max(0, now - lastTick);
-        lastTimerTickMsRef.current = now;
-
-        const lastBlinkVisible = lastBlinkVisibleTotalMsRef.current;
-        const visibleElapsedMs =
-          lastBlinkVisible === null ? 0 : Math.max(0, getVisibleTotalMs(now) - lastBlinkVisible);
-        const sec = visibleElapsedMs / 1000;
-
-        if (visibleElapsedMs > longestNoBlinkMsRef.current) {
-          longestNoBlinkMsRef.current = visibleElapsedMs;
-        }
-
-        dispatch({ type: "SET_SECONDS", seconds: sec });
-
-        if (!faceDetectedRef.current) {
-          dispatch({ type: "ALERT_OFF" });
-          lastAlertOnRef.current = false;
-          return;
-        }
-
-        if (sec >= noBlinkThreshold) {
-          riskyVisibleTimeMsRef.current += deltaMs;
-          dispatch({ type: "ALERT_ON" });
-
-          if (!lastAlertOnRef.current) {
-            lastAlertOnRef.current = true;
-            alertCountRef.current += 1;
-            showAlertNotification();
-          } else {
-            showAlertNotification();
-          }
-
-          if (now - lastAlertAtRef.current >= ALERT_REPEAT_MS) {
-            lastAlertAtRef.current = now;
-            beep();
-          }
-        } else {
-          dispatch({ type: "ALERT_OFF" });
-          lastAlertOnRef.current = false;
-        }
-      }, 100);
     } catch (e: any) {
       cleanupLoopsAndStream();
       dispatch({ type: "ERROR", message: e?.message ?? "Failed to start." });
