@@ -23,6 +23,10 @@ type SessionSummary = {
   visibilityPercent: number;
   blinkCompliancePercent: number;
 
+  blinkIntegralMs: number;
+  averageBlinkSpacingMs: number | null;
+  blinkSpacingStdMs: number | null;
+
   score: number | null;
   grade: string;
   gradeReason: string;
@@ -73,6 +77,7 @@ type UiState = {
   notifEnabled: boolean;
   notifPermission: "default" | "granted" | "denied";
   faceDetected: boolean;
+  devMode: boolean;
 };
 
 type Action =
@@ -90,7 +95,8 @@ type Action =
   | { type: "CLEAR_ERROR" }
   | { type: "SET_NOTIF_ENABLED"; enabled: boolean }
   | { type: "SET_NOTIF_PERMISSION"; perm: "default" | "granted" | "denied" }
-  | { type: "SET_FACE_DETECTED"; detected: boolean };
+  | { type: "SET_FACE_DETECTED"; detected: boolean }
+  | { type: "TOGGLE_DEV_MODE" };
 
 const initialState: UiState = {
   running: false,
@@ -105,6 +111,7 @@ const initialState: UiState = {
   notifEnabled: true,
   notifPermission: "default",
   faceDetected: false,
+  devMode: false,
 };
 
 function reducer(state: UiState, action: Action): UiState {
@@ -118,6 +125,7 @@ function reducer(state: UiState, action: Action): UiState {
         agreed: state.agreed,
         notifEnabled: state.notifEnabled,
         notifPermission: state.notifPermission,
+        devMode: state.devMode,
       };
 
     case "STOP":
@@ -169,6 +177,9 @@ function reducer(state: UiState, action: Action): UiState {
     case "SET_FACE_DETECTED":
       return { ...state, faceDetected: action.detected };
 
+    case "TOGGLE_DEV_MODE":
+      return { ...state, devMode: !state.devMode };
+
     default:
       return state;
   }
@@ -182,22 +193,65 @@ function formatDuration(ms: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
+function formatSecondsMs(ms: number | null) {
+  if (ms === null) return "N/A";
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function mean(nums: number[]) {
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function stdDev(nums: number[]) {
+  if (nums.length < 2) return null;
+  const avg = mean(nums);
+  if (avg === null) return null;
+  const variance = nums.reduce((acc, n) => acc + (n - avg) ** 2, 0) / nums.length;
+  return Math.sqrt(variance);
+}
+
+function drawPoint(ctx: CanvasRenderingContext2D, x: number, y: number, r = 3) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
+
 function gradeSession(args: {
   visibleMs: number;
-  hiddenMs: number;
   totalMs: number;
-  blinks: number;
   bpm: number;
   alerts: number;
   longestNoBlinkMs: number;
   riskyVisibleMs: number;
+  blinkIntegralMs: number;
+  averageBlinkSpacingMs: number | null;
+  blinkSpacingStdMs: number | null;
 }) {
-  const { visibleMs, totalMs, bpm, alerts, longestNoBlinkMs, riskyVisibleMs } = args;
+  const {
+    visibleMs,
+    totalMs,
+    bpm,
+    alerts,
+    longestNoBlinkMs,
+    riskyVisibleMs,
+    blinkIntegralMs,
+    averageBlinkSpacingMs,
+    blinkSpacingStdMs,
+  } = args;
 
   const visibilityPercent = totalMs > 0 ? (visibleMs / totalMs) * 100 : 0;
   const blinkCompliancePercent = visibleMs > 0 ? ((visibleMs - riskyVisibleMs) / visibleMs) * 100 : 0;
   const visibleMinutes = visibleMs / 60000;
   const longestNoBlinkSec = longestNoBlinkMs / 1000;
+  const blinkIntegralPerMinute = visibleMinutes > 0 ? blinkIntegralMs / visibleMinutes : 0;
 
   if (visibleMinutes < 0.5) {
     return {
@@ -218,7 +272,7 @@ function gradeSession(args: {
   }
 
   if (bpm >= 15 && bpm <= 25) {
-    // ideal range
+    // ideal
   } else if ((bpm >= 10 && bpm < 15) || (bpm > 25 && bpm <= 30)) {
     score -= 10;
     reasons.push("blink rate slightly outside target range");
@@ -272,6 +326,36 @@ function gradeSession(args: {
     reasons.push("some extended no-blink periods");
   }
 
+  if (blinkIntegralPerMinute < 1200) {
+    score -= 15;
+    reasons.push("low blink integral");
+  } else if (blinkIntegralPerMinute < 1800) {
+    score -= 8;
+    reasons.push("blink integral slightly low");
+  }
+
+  if (averageBlinkSpacingMs !== null) {
+    const avgSpacingSec = averageBlinkSpacingMs / 1000;
+    if (avgSpacingSec > 8) {
+      score -= 12;
+      reasons.push("blinks are spaced too far apart");
+    } else if (avgSpacingSec < 2) {
+      score -= 8;
+      reasons.push("blinks are unusually clustered");
+    }
+  }
+
+  if (blinkSpacingStdMs !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
+    const cv = blinkSpacingStdMs / averageBlinkSpacingMs;
+    if (cv > 1.1) {
+      score -= 10;
+      reasons.push("blink spacing is highly inconsistent");
+    } else if (cv > 0.8) {
+      score -= 5;
+      reasons.push("blink spacing is somewhat inconsistent");
+    }
+  }
+
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   let grade = "F";
@@ -283,7 +367,7 @@ function gradeSession(args: {
   const gradeReason =
     reasons.length > 0
       ? reasons.join(", ")
-      : "steady blinking, good face visibility, and no alert issues";
+      : "steady blinking, good face visibility, good blink spacing, and no alert issues";
 
   return {
     score,
@@ -314,10 +398,12 @@ export default function Page() {
     notifEnabled,
     notifPermission,
     faceDetected,
+    devMode,
   } = state;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hiddenCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -350,6 +436,20 @@ export default function Page() {
   const alertCountRef = useRef(0);
   const longestNoBlinkMsRef = useRef(0);
   const riskyVisibleTimeMsRef = useRef(0);
+  const blinkIntegralMsRef = useRef(0);
+  const blinkIntervalsRef = useRef<number[]>([]);
+
+  const devMetricsRef = useRef({
+    leftEAR: 0,
+    rightEAR: 0,
+    avgEAR: 0,
+    leftV1: 0,
+    leftV2: 0,
+    rightV1: 0,
+    rightV2: 0,
+    leftH: 0,
+    rightH: 0,
+  });
 
   const audioCtxRef = useRef<AudioContext | null>(null);
 
@@ -532,6 +632,20 @@ export default function Page() {
     alertCountRef.current = 0;
     longestNoBlinkMsRef.current = 0;
     riskyVisibleTimeMsRef.current = 0;
+    blinkIntegralMsRef.current = 0;
+    blinkIntervalsRef.current = [];
+
+    devMetricsRef.current = {
+      leftEAR: 0,
+      rightEAR: 0,
+      avgEAR: 0,
+      leftV1: 0,
+      leftV2: 0,
+      rightV1: 0,
+      rightV2: 0,
+      leftH: 0,
+      rightH: 0,
+    };
 
     lastBpmUpdateRef.current = 0;
 
@@ -543,6 +657,12 @@ export default function Page() {
     dispatch({ type: "SET_FACE_DETECTED", detected: false });
     dispatch({ type: "SET_SECONDS", seconds: 0 });
     dispatch({ type: "ALERT_OFF" });
+
+    const overlay = overlayCanvasRef.current;
+    if (overlay) {
+      const octx = overlay.getContext("2d");
+      if (octx) octx.clearRect(0, 0, overlay.width, overlay.height);
+    }
   }
 
   function cleanupLoopsAndStream() {
@@ -561,6 +681,12 @@ export default function Page() {
         meshRef.current.close();
       } catch {}
       meshRef.current = null;
+    }
+
+    const overlay = overlayCanvasRef.current;
+    if (overlay) {
+      const octx = overlay.getContext("2d");
+      if (octx) octx.clearRect(0, 0, overlay.width, overlay.height);
     }
   }
 
@@ -617,6 +743,8 @@ export default function Page() {
         const deltaMs = prevMetricsNow === null ? 0 : Math.max(0, now - prevMetricsNow);
         lastMetricsUpdateMsRef.current = now;
 
+        const videoEl = videoRef.current;
+        const overlay = overlayCanvasRef.current;
         const hasFace = !!res.multiFaceLandmarks?.length;
 
         if (hasFace) {
@@ -636,6 +764,11 @@ export default function Page() {
             }
             dispatch({ type: "ALERT_OFF" });
             lastAlertOnRef.current = false;
+
+            if (overlay) {
+              const octx = overlay.getContext("2d");
+              if (octx) octx.clearRect(0, 0, overlay.width, overlay.height);
+            }
           }
 
           return;
@@ -649,6 +782,85 @@ export default function Page() {
         const left = ear(lm[L.p1], lm[L.p2], lm[L.p3], lm[L.p4], lm[L.p5], lm[L.p6]);
         const right = ear(lm[R.p1], lm[R.p2], lm[R.p3], lm[R.p4], lm[R.p5], lm[R.p6]);
         const curEar = (left + right) / 2;
+
+        if (videoEl) {
+          const toPx = (p: Point) => ({
+            x: p.x * videoEl.videoWidth,
+            y: p.y * videoEl.videoHeight,
+          });
+
+          const lp1 = toPx(lm[L.p1]);
+          const lp2 = toPx(lm[L.p2]);
+          const lp3 = toPx(lm[L.p3]);
+          const lp4 = toPx(lm[L.p4]);
+          const lp5 = toPx(lm[L.p5]);
+          const lp6 = toPx(lm[L.p6]);
+
+          const rp1 = toPx(lm[R.p1]);
+          const rp2 = toPx(lm[R.p2]);
+          const rp3 = toPx(lm[R.p3]);
+          const rp4 = toPx(lm[R.p4]);
+          const rp5 = toPx(lm[R.p5]);
+          const rp6 = toPx(lm[R.p6]);
+
+          const leftV1 = dist(lp2, lp6);
+          const leftV2 = dist(lp3, lp5);
+          const leftH = dist(lp1, lp4);
+
+          const rightV1 = dist(rp2, rp6);
+          const rightV2 = dist(rp3, rp5);
+          const rightH = dist(rp1, rp4);
+
+          devMetricsRef.current = {
+            leftEAR: left,
+            rightEAR: right,
+            avgEAR: curEar,
+            leftV1,
+            leftV2,
+            rightV1,
+            rightV2,
+            leftH,
+            rightH,
+          };
+
+          if (devMode && overlay) {
+            overlay.width = videoEl.videoWidth || 640;
+            overlay.height = videoEl.videoHeight || 480;
+
+            const octx = overlay.getContext("2d");
+            if (octx) {
+              octx.clearRect(0, 0, overlay.width, overlay.height);
+
+              octx.lineWidth = 2;
+              octx.fillStyle = "#00ff88";
+              octx.strokeStyle = "#00ff88";
+
+              [lp1, lp2, lp3, lp4, lp5, lp6, rp1, rp2, rp3, rp4, rp5, rp6].forEach((p) => {
+                drawPoint(octx, p.x, p.y, 4);
+              });
+
+              octx.strokeStyle = "#00bfff";
+              drawLine(octx, lp1.x, lp1.y, lp4.x, lp4.y);
+              drawLine(octx, lp2.x, lp2.y, lp6.x, lp6.y);
+              drawLine(octx, lp3.x, lp3.y, lp5.x, lp5.y);
+
+              drawLine(octx, rp1.x, rp1.y, rp4.x, rp4.y);
+              drawLine(octx, rp2.x, rp2.y, rp6.x, rp6.y);
+              drawLine(octx, rp3.x, rp3.y, rp5.x, rp5.y);
+
+              octx.fillStyle = "#ffffff";
+              octx.font = "16px Arial";
+              octx.fillText(`Left EAR: ${left.toFixed(3)}`, 16, 28);
+              octx.fillText(`Right EAR: ${right.toFixed(3)}`, 16, 50);
+              octx.fillText(`Avg EAR: ${curEar.toFixed(3)}`, 16, 72);
+              octx.fillText(`Lid Dist L: ${leftV1.toFixed(1)}, ${leftV2.toFixed(1)}`, 16, 94);
+              octx.fillText(`Lid Dist R: ${rightV1.toFixed(1)}, ${rightV2.toFixed(1)}`, 16, 116);
+            }
+          } else if (overlay) {
+            const octx = overlay.getContext("2d");
+            if (octx) octx.clearRect(0, 0, overlay.width, overlay.height);
+          }
+        }
 
         if (baselineEarRef.current === null) {
           if (calibStartRef.current === null) calibStartRef.current = now;
@@ -681,17 +893,30 @@ export default function Page() {
             eyeStateRef.current = "CLOSED";
           }
         } else {
-          if (curEar < closeThr) closedFramesRef.current += 1;
+          blinkIntegralMsRef.current += deltaMs;
+
+          if (curEar < closeThr) {
+            closedFramesRef.current += 1;
+          }
 
           if (curEar > openThr) {
             const longEnough = closedFramesRef.current >= MIN_CLOSED_FRAMES;
             const farEnough = now - lastBlinkMsRef.current >= MIN_BLINK_GAP_MS;
 
             if (longEnough && farEnough) {
+              const currentVisibleTotal = getVisibleTotalMs(now);
+
+              if (lastBlinkVisibleTotalMsRef.current !== null) {
+                const spacingMs = Math.max(0, currentVisibleTotal - lastBlinkVisibleTotalMsRef.current);
+                if (spacingMs > 0) {
+                  blinkIntervalsRef.current.push(spacingMs);
+                }
+              }
+
               blinkCountRef.current += 1;
               dispatch({ type: "SET_BLINKS", blinks: blinkCountRef.current });
               lastBlinkMsRef.current = now;
-              lastBlinkVisibleTotalMsRef.current = getVisibleTotalMs(now);
+              lastBlinkVisibleTotalMsRef.current = currentVisibleTotal;
               dispatch({ type: "SET_SECONDS", seconds: 0 });
               dispatch({ type: "ALERT_OFF" });
               lastAlertOnRef.current = false;
@@ -781,16 +1006,19 @@ export default function Page() {
     const totalSessionTime =
       sessionStartRef.current !== null ? Math.max(0, now - sessionStartRef.current) : totalVisible + totalHidden;
     const averageBlinksPerMinute = totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
+    const averageBlinkSpacingMs = mean(blinkIntervalsRef.current);
+    const blinkSpacingStdMs = stdDev(blinkIntervalsRef.current);
 
     const grading = gradeSession({
       visibleMs: totalVisible,
-      hiddenMs: totalHidden,
       totalMs: totalSessionTime,
-      blinks: blinkCountRef.current,
       bpm: averageBlinksPerMinute,
       alerts: alertCountRef.current,
       longestNoBlinkMs: longestNoBlinkMsRef.current,
       riskyVisibleMs: riskyVisibleTimeMsRef.current,
+      blinkIntegralMs: blinkIntegralMsRef.current,
+      averageBlinkSpacingMs,
+      blinkSpacingStdMs,
     });
 
     const summary: SessionSummary = {
@@ -804,6 +1032,10 @@ export default function Page() {
       longestNoBlinkMs: longestNoBlinkMsRef.current,
       visibilityPercent: grading.visibilityPercent,
       blinkCompliancePercent: grading.blinkCompliancePercent,
+
+      blinkIntegralMs: blinkIntegralMsRef.current,
+      averageBlinkSpacingMs,
+      blinkSpacingStdMs,
 
       score: grading.score,
       grade: grading.grade,
@@ -967,6 +1199,13 @@ export default function Page() {
           {running ? "Stop" : "Start"}
         </button>
 
+        <button
+          onClick={() => dispatch({ type: "TOGGLE_DEV_MODE" })}
+          style={{ padding: "8px 14px", cursor: "pointer" }}
+        >
+          {devMode ? "Dev Mode On" : "Dev Mode Off"}
+        </button>
+
         <div
           style={{
             padding: "6px 10px",
@@ -1044,7 +1283,7 @@ export default function Page() {
         {sessionSummary && !running ? (
           <div
             style={{
-              width: "min(700px, 100%)",
+              width: "min(760px, 100%)",
               minHeight: 480,
               background: "#111",
               border: "1px solid #333",
@@ -1086,6 +1325,15 @@ export default function Page() {
                 <b>Blink compliance:</b> {sessionSummary.blinkCompliancePercent.toFixed(1)}%
               </div>
               <div>
+                <b>Blink integral:</b> {formatSecondsMs(sessionSummary.blinkIntegralMs)} total eye-closure time
+              </div>
+              <div>
+                <b>Average blink spacing:</b> {formatSecondsMs(sessionSummary.averageBlinkSpacingMs)}
+              </div>
+              <div>
+                <b>Blink spacing std dev:</b> {formatSecondsMs(sessionSummary.blinkSpacingStdMs)}
+              </div>
+              <div>
                 <b>Session score:</b> {sessionSummary.score === null ? "N/A" : `${sessionSummary.score}/100`}
               </div>
               <div>
@@ -1118,14 +1366,26 @@ export default function Page() {
             </div>
           </div>
         ) : running ? (
-          <div>
+          <div style={{ position: "relative", width: 640, height: 480 }}>
             <video
               ref={videoRef}
               muted
               playsInline
               width={640}
               height={480}
-              style={{ borderRadius: 10, background: "#111" }}
+              style={{ borderRadius: 10, background: "#111", position: "absolute", inset: 0 }}
+            />
+            <canvas
+              ref={overlayCanvasRef}
+              width={640}
+              height={480}
+              style={{
+                position: "absolute",
+                inset: 0,
+                borderRadius: 10,
+                pointerEvents: "none",
+                display: devMode ? "block" : "none",
+              }}
             />
             <canvas ref={hiddenCanvasRef} style={{ display: "none" }} />
           </div>
@@ -1160,6 +1420,27 @@ export default function Page() {
         </div>
         <div style={{ opacity: 0.75 }}>Tip: if you don’t hear sound, click once on the page (browser audio rule).</div>
       </div>
+
+      {devMode && running && (
+        <div
+          style={{
+            marginTop: 12,
+            lineHeight: 1.7,
+            background: "#111",
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #222",
+          }}
+        >
+          <div><b>Left EAR:</b> {devMetricsRef.current.leftEAR.toFixed(3)}</div>
+          <div><b>Right EAR:</b> {devMetricsRef.current.rightEAR.toFixed(3)}</div>
+          <div><b>Average EAR:</b> {devMetricsRef.current.avgEAR.toFixed(3)}</div>
+          <div><b>Left eyelid distances:</b> {devMetricsRef.current.leftV1.toFixed(1)}, {devMetricsRef.current.leftV2.toFixed(1)}</div>
+          <div><b>Right eyelid distances:</b> {devMetricsRef.current.rightV1.toFixed(1)}, {devMetricsRef.current.rightV2.toFixed(1)}</div>
+          <div><b>Left eye width:</b> {devMetricsRef.current.leftH.toFixed(1)}</div>
+          <div><b>Right eye width:</b> {devMetricsRef.current.rightH.toFixed(1)}</div>
+        </div>
+      )}
     </div>
   );
 }
