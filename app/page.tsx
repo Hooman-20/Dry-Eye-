@@ -224,6 +224,20 @@ function drawLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: num
   ctx.stroke();
 }
 
+function drawMeasurementLabel(ctx: CanvasRenderingContext2D, x: number, y: number, text: string) {
+  ctx.font = "12px Arial";
+  const textWidth = ctx.measureText(text).width;
+  const padX = 6;
+  const boxW = textWidth + padX * 2;
+  const boxH = 18;
+
+  ctx.fillStyle = "#00ff88";
+  ctx.fillRect(x - 4, y - 16, boxW, boxH);
+
+  ctx.fillStyle = "#000";
+  ctx.fillText(text, x + padX - 4, y - 3);
+}
+
 function gradeSession(args: {
   visibleMs: number;
   totalMs: number;
@@ -449,6 +463,8 @@ export default function Page() {
     rightV2: 0,
     leftH: 0,
     rightH: 0,
+    leftOpenAvg: 0,
+    rightOpenAvg: 0,
   });
 
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -645,6 +661,8 @@ export default function Page() {
       rightV2: 0,
       leftH: 0,
       rightH: 0,
+      leftOpenAvg: 0,
+      rightOpenAvg: 0,
     };
 
     lastBpmUpdateRef.current = 0;
@@ -811,6 +829,26 @@ export default function Page() {
           const rightV2 = dist(rp3, rp5);
           const rightH = dist(rp1, rp4);
 
+          const leftMid1 = {
+            x: (lp2.x + lp6.x) / 2,
+            y: (lp2.y + lp6.y) / 2,
+          };
+          const leftMid2 = {
+            x: (lp3.x + lp5.x) / 2,
+            y: (lp3.y + lp5.y) / 2,
+          };
+          const rightMid1 = {
+            x: (rp2.x + rp6.x) / 2,
+            y: (rp2.y + rp6.y) / 2,
+          };
+          const rightMid2 = {
+            x: (rp3.x + rp5.x) / 2,
+            y: (rp3.y + rp5.y) / 2,
+          };
+
+          const leftOpenAvg = (leftV1 + leftV2) / 2;
+          const rightOpenAvg = (rightV1 + rightV2) / 2;
+
           devMetricsRef.current = {
             leftEAR: left,
             rightEAR: right,
@@ -821,6 +859,8 @@ export default function Page() {
             rightV2,
             leftH,
             rightH,
+            leftOpenAvg,
+            rightOpenAvg,
           };
 
           if (devMode && overlay) {
@@ -848,13 +888,31 @@ export default function Page() {
               drawLine(octx, rp2.x, rp2.y, rp6.x, rp6.y);
               drawLine(octx, rp3.x, rp3.y, rp5.x, rp5.y);
 
+              // Small green eyelid opening indicators
+              octx.strokeStyle = "#00ff88";
+              octx.lineWidth = 3;
+
+              drawLine(octx, leftMid1.x - 14, leftMid1.y, leftMid1.x - 14, leftMid1.y - leftV1);
+              drawLine(octx, leftMid2.x - 20, leftMid2.y, leftMid2.x - 20, leftMid2.y - leftV2);
+
+              drawLine(octx, rightMid1.x + 14, rightMid1.y, rightMid1.x + 14, rightMid1.y - rightV1);
+              drawLine(octx, rightMid2.x + 20, rightMid2.y, rightMid2.x + 20, rightMid2.y - rightV2);
+
+              // Labels near each eye opening measurement
+              drawMeasurementLabel(octx, leftMid1.x - 68, leftMid1.y - 6, `${leftV1.toFixed(1)} px`);
+              drawMeasurementLabel(octx, leftMid2.x - 74, leftMid2.y + 18, `${leftV2.toFixed(1)} px`);
+
+              drawMeasurementLabel(octx, rightMid1.x + 18, rightMid1.y - 6, `${rightV1.toFixed(1)} px`);
+              drawMeasurementLabel(octx, rightMid2.x + 24, rightMid2.y + 18, `${rightV2.toFixed(1)} px`);
+
+              // Summary text
               octx.fillStyle = "#ffffff";
               octx.font = "16px Arial";
               octx.fillText(`Left EAR: ${left.toFixed(3)}`, 16, 28);
               octx.fillText(`Right EAR: ${right.toFixed(3)}`, 16, 50);
               octx.fillText(`Avg EAR: ${curEar.toFixed(3)}`, 16, 72);
-              octx.fillText(`Lid Dist L: ${leftV1.toFixed(1)}, ${leftV2.toFixed(1)}`, 16, 94);
-              octx.fillText(`Lid Dist R: ${rightV1.toFixed(1)}, ${rightV2.toFixed(1)}`, 16, 116);
+              octx.fillText(`Eye Open L: ${leftOpenAvg.toFixed(1)} px`, 16, 94);
+              octx.fillText(`Eye Open R: ${rightOpenAvg.toFixed(1)} px`, 16, 116);
             }
           } else if (overlay) {
             const octx = overlay.getContext("2d");
@@ -1437,6 +1495,8 @@ export default function Page() {
           <div><b>Average EAR:</b> {devMetricsRef.current.avgEAR.toFixed(3)}</div>
           <div><b>Left eyelid distances:</b> {devMetricsRef.current.leftV1.toFixed(1)}, {devMetricsRef.current.leftV2.toFixed(1)}</div>
           <div><b>Right eyelid distances:</b> {devMetricsRef.current.rightV1.toFixed(1)}, {devMetricsRef.current.rightV2.toFixed(1)}</div>
+          <div><b>Left eye opening average:</b> {devMetricsRef.current.leftOpenAvg.toFixed(1)} px</div>
+          <div><b>Right eye opening average:</b> {devMetricsRef.current.rightOpenAvg.toFixed(1)} px</div>
           <div><b>Left eye width:</b> {devMetricsRef.current.leftH.toFixed(1)}</div>
           <div><b>Right eye width:</b> {devMetricsRef.current.rightH.toFixed(1)}</div>
         </div>
