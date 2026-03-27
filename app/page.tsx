@@ -238,6 +238,15 @@ function drawMeasurementLabel(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.fillText(text, x + padX - 4, y - 3);
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function smoothPenalty(distance: number, maxDistance: number, maxPenalty: number) {
+  const x = clamp(distance / maxDistance, 0, 1);
+  return maxPenalty * x * x;
+}
+
 function gradeSession(args: {
   visibleMs: number;
   totalMs: number;
@@ -280,94 +289,94 @@ function gradeSession(args: {
   let score = 100;
   const reasons: string[] = [];
 
+  let sessionLengthPenalty = 0;
   if (visibleMinutes < 1) {
-    score -= 10;
+    sessionLengthPenalty = smoothPenalty(1 - visibleMinutes, 0.5, 10);
+    score -= sessionLengthPenalty;
     reasons.push("limited session length");
   }
 
-  if (bpm >= 15 && bpm <= 25) {
-    // ideal
-  } else if ((bpm >= 10 && bpm < 15) || (bpm > 25 && bpm <= 30)) {
-    score -= 10;
-    reasons.push("blink rate slightly outside target range");
-  } else if ((bpm >= 7 && bpm < 10) || (bpm > 30 && bpm <= 35)) {
-    score -= 20;
-    reasons.push("blink rate outside healthy target range");
-  } else {
-    score -= 35;
-    reasons.push("blink rate far from target range");
+  let blinkPenalty = 0;
+  if (bpm < 15) {
+    blinkPenalty = smoothPenalty(15 - bpm, 10, 35);
+  } else if (bpm > 25) {
+    blinkPenalty = smoothPenalty(bpm - 25, 10, 35);
+  }
+  if (blinkPenalty > 0) {
+    score -= blinkPenalty;
+    reasons.push("blink rate outside target range");
   }
 
-  if (alerts === 0) {
-    // no penalty
-  } else if (alerts <= 2) {
-    score -= 8;
-    reasons.push("a few no-blink alerts");
-  } else if (alerts <= 5) {
-    score -= 18;
-    reasons.push("multiple no-blink alerts");
-  } else {
-    score -= 30;
-    reasons.push("frequent no-blink alerts");
+  let alertPenalty = 0;
+  if (alerts > 0) {
+    alertPenalty = smoothPenalty(alerts, 6, 30);
+  }
+  if (alertPenalty > 0) {
+    score -= alertPenalty;
+    reasons.push("no-blink alerts occurred");
   }
 
-  if (longestNoBlinkSec <= 10) {
-    // no penalty
-  } else if (longestNoBlinkSec <= 15) {
-    score -= 8;
-    reasons.push("one longer no-blink streak");
-  } else if (longestNoBlinkSec <= 20) {
-    score -= 15;
+  let streakPenalty = 0;
+  if (longestNoBlinkSec > 10) {
+    streakPenalty = smoothPenalty(longestNoBlinkSec - 10, 15, 25);
+  }
+  if (streakPenalty > 0) {
+    score -= streakPenalty;
     reasons.push("long no-blink streak");
-  } else {
-    score -= 25;
-    reasons.push("very long no-blink streak");
   }
 
-  if (visibilityPercent < 60) {
-    score -= 20;
-    reasons.push("face not visible for much of session");
-  } else if (visibilityPercent < 80) {
-    score -= 8;
+  let visibilityPenalty = 0;
+  if (visibilityPercent < 100) {
+    visibilityPenalty = smoothPenalty(100 - visibilityPercent, 40, 20);
+  }
+  if (visibilityPenalty > 0) {
+    score -= visibilityPenalty;
     reasons.push("face visibility could be more consistent");
   }
 
-  if (blinkCompliancePercent < 70) {
-    score -= 18;
-    reasons.push("too much time spent above the no-blink threshold");
-  } else if (blinkCompliancePercent < 85) {
-    score -= 8;
-    reasons.push("some extended no-blink periods");
+  let compliancePenalty = 0;
+  if (blinkCompliancePercent < 100) {
+    compliancePenalty = smoothPenalty(100 - blinkCompliancePercent, 30, 18);
+  }
+  if (compliancePenalty > 0) {
+    score -= compliancePenalty;
+    reasons.push("extended no-blink periods");
   }
 
-  if (blinkIntegralPerMinute < 1200) {
-    score -= 15;
+  let integralPenalty = 0;
+  if (blinkIntegralPerMinute < 1800) {
+    integralPenalty = smoothPenalty(1800 - blinkIntegralPerMinute, 900, 15);
+  }
+  if (integralPenalty > 0) {
+    score -= integralPenalty;
     reasons.push("low blink integral");
-  } else if (blinkIntegralPerMinute < 1800) {
-    score -= 8;
-    reasons.push("blink integral slightly low");
   }
 
+  let spacingPenalty = 0;
   if (averageBlinkSpacingMs !== null) {
     const avgSpacingSec = averageBlinkSpacingMs / 1000;
-    if (avgSpacingSec > 8) {
-      score -= 12;
-      reasons.push("blinks are spaced too far apart");
-    } else if (avgSpacingSec < 2) {
-      score -= 8;
-      reasons.push("blinks are unusually clustered");
+
+    if (avgSpacingSec > 5) {
+      spacingPenalty += smoothPenalty(avgSpacingSec - 5, 5, 12);
+    } else if (avgSpacingSec < 3) {
+      spacingPenalty += smoothPenalty(3 - avgSpacingSec, 2, 8);
     }
   }
+  if (spacingPenalty > 0) {
+    score -= spacingPenalty;
+    reasons.push("blink spacing is outside the preferred range");
+  }
 
+  let consistencyPenalty = 0;
   if (blinkSpacingStdMs !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
     const cv = blinkSpacingStdMs / averageBlinkSpacingMs;
-    if (cv > 1.1) {
-      score -= 10;
-      reasons.push("blink spacing is highly inconsistent");
-    } else if (cv > 0.8) {
-      score -= 5;
-      reasons.push("blink spacing is somewhat inconsistent");
+    if (cv > 0.5) {
+      consistencyPenalty = smoothPenalty(cv - 0.5, 0.8, 10);
     }
+  }
+  if (consistencyPenalty > 0) {
+    score -= consistencyPenalty;
+    reasons.push("blink spacing is inconsistent");
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
