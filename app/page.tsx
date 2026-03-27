@@ -247,6 +247,24 @@ function smoothPenalty(distance: number, maxDistance: number, maxPenalty: number
   return maxPenalty * x * x;
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function scoreRange(value: number, idealMin: number, idealMax: number, tolerance: number) {
+  if (value >= idealMin && value <= idealMax) return 100;
+
+  if (value < idealMin) {
+    const d = idealMin - value;
+    const x = clamp(d / tolerance, 0, 1);
+    return Math.round(100 * (1 - x * x));
+  }
+
+  const d = value - idealMax;
+  const x = clamp(d / tolerance, 0, 1);
+  return Math.round(100 * (1 - x * x));
+}
+
 function gradeSession(args: {
   visibleMs: number;
   totalMs: number;
@@ -286,100 +304,72 @@ function gradeSession(args: {
     };
   }
 
-  let score = 100;
-  const reasons: string[] = [];
+  // 1) Blink rate score
+  const blinkRateScore = scoreRange(bpm, 15, 25, 12);
 
-  let sessionLengthPenalty = 0;
-  if (visibleMinutes < 1) {
-    sessionLengthPenalty = smoothPenalty(1 - visibleMinutes, 0.5, 10);
-    score -= sessionLengthPenalty;
-    reasons.push("limited session length");
-  }
+  // 2) Sustained blinking behavior score
+  // Use compliance as the main signal, then only lightly adjust for alerts / longest streak
+  let sustainedScore = clamp(blinkCompliancePercent, 0, 100);
 
-  let blinkPenalty = 0;
-  if (bpm < 15) {
-    blinkPenalty = smoothPenalty(15 - bpm, 10, 35);
-  } else if (bpm > 25) {
-    blinkPenalty = smoothPenalty(bpm - 25, 10, 35);
-  }
-  if (blinkPenalty > 0) {
-    score -= blinkPenalty;
-    reasons.push("blink rate outside target range");
-  }
-
-  let alertPenalty = 0;
-  if (alerts > 0) {
-    alertPenalty = smoothPenalty(alerts, 6, 30);
-  }
-  if (alertPenalty > 0) {
-    score -= alertPenalty;
-    reasons.push("no-blink alerts occurred");
-  }
-
-  let streakPenalty = 0;
   if (longestNoBlinkSec > 10) {
-    streakPenalty = smoothPenalty(longestNoBlinkSec - 10, 15, 25);
-  }
-  if (streakPenalty > 0) {
-    score -= streakPenalty;
-    reasons.push("long no-blink streak");
+    const extra = clamp((longestNoBlinkSec - 10) / 15, 0, 1);
+    sustainedScore -= extra * 15;
   }
 
-  let visibilityPenalty = 0;
-  if (visibilityPercent < 100) {
-    visibilityPenalty = smoothPenalty(100 - visibilityPercent, 40, 20);
-  }
-  if (visibilityPenalty > 0) {
-    score -= visibilityPenalty;
-    reasons.push("face visibility could be more consistent");
+  if (alerts > 0) {
+    const extra = clamp(alerts / 6, 0, 1);
+    sustainedScore -= extra * 10;
   }
 
-  let compliancePenalty = 0;
-  if (blinkCompliancePercent < 100) {
-    compliancePenalty = smoothPenalty(100 - blinkCompliancePercent, 30, 18);
-  }
-  if (compliancePenalty > 0) {
-    score -= compliancePenalty;
-    reasons.push("extended no-blink periods");
-  }
+  sustainedScore = Math.round(clamp(sustainedScore, 0, 100));
 
-  let integralPenalty = 0;
-  if (blinkIntegralPerMinute < 1800) {
-    integralPenalty = smoothPenalty(1800 - blinkIntegralPerMinute, 900, 15);
-  }
-  if (integralPenalty > 0) {
-    score -= integralPenalty;
-    reasons.push("low blink integral");
-  }
+  // 3) Visibility score
+  const visibilityScore = Math.round(clamp(visibilityPercent, 0, 100));
 
-  let spacingPenalty = 0;
+  // 4) Rhythm score
+  let rhythmScore = 100;
+
   if (averageBlinkSpacingMs !== null) {
     const avgSpacingSec = averageBlinkSpacingMs / 1000;
-
-    if (avgSpacingSec > 5) {
-      spacingPenalty += smoothPenalty(avgSpacingSec - 5, 5, 12);
-    } else if (avgSpacingSec < 3) {
-      spacingPenalty += smoothPenalty(3 - avgSpacingSec, 2, 8);
-    }
-  }
-  if (spacingPenalty > 0) {
-    score -= spacingPenalty;
-    reasons.push("blink spacing is outside the preferred range");
+    const spacingScore = scoreRange(avgSpacingSec, 3, 5, 4);
+    rhythmScore = Math.min(rhythmScore, spacingScore);
   }
 
-  let consistencyPenalty = 0;
   if (blinkSpacingStdMs !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
     const cv = blinkSpacingStdMs / averageBlinkSpacingMs;
-    if (cv > 0.5) {
-      consistencyPenalty = smoothPenalty(cv - 0.5, 0.8, 10);
+
+    let consistencyScore = 100;
+    if (cv > 0.35) {
+      const x = clamp((cv - 0.35) / 0.65, 0, 1);
+      consistencyScore = Math.round(100 * (1 - x * x));
     }
-  }
-  if (consistencyPenalty > 0) {
-    score -= consistencyPenalty;
-    reasons.push("blink spacing is inconsistent");
+
+    rhythmScore = Math.round((rhythmScore + consistencyScore) / 2);
   }
 
-  score = Math.max(0, Math.min(100, Math.round(score)));
+  // 5) Session quality score
+  let sessionQualityScore = 100;
+
+  if (visibleMinutes < 1) {
+    const x = clamp((1 - visibleMinutes) / 0.5, 0, 1);
+    sessionQualityScore -= x * 20;
+  }
+
+  if (blinkIntegralPerMinute < 1800) {
+    const x = clamp((1800 - blinkIntegralPerMinute) / 900, 0, 1);
+    sessionQualityScore -= x * 15;
+  }
+
+  sessionQualityScore = Math.round(clamp(sessionQualityScore, 0, 100));
+
+  // Final weighted score
+  const score = Math.round(
+    blinkRateScore * 0.30 +
+    sustainedScore * 0.30 +
+    visibilityScore * 0.15 +
+    rhythmScore * 0.15 +
+    sessionQualityScore * 0.10
+  );
 
   let grade = "F";
   if (score >= 90) grade = "A";
@@ -387,10 +377,18 @@ function gradeSession(args: {
   else if (score >= 70) grade = "C";
   else if (score >= 60) grade = "D";
 
+  const reasons: string[] = [];
+
+  if (blinkRateScore < 80) reasons.push("blink rate was outside the preferred range");
+  if (sustainedScore < 80) reasons.push("there were extended no-blink periods");
+  if (visibilityScore < 80) reasons.push("face visibility was not consistent");
+  if (rhythmScore < 80) reasons.push("blink rhythm was inconsistent");
+  if (sessionQualityScore < 80) reasons.push("session quality was limited");
+
   const gradeReason =
     reasons.length > 0
       ? reasons.join(", ")
-      : "steady blinking, good face visibility, good blink spacing, and no alert issues";
+      : "steady blinking, good visibility, and consistent blink behavior";
 
   return {
     score,
