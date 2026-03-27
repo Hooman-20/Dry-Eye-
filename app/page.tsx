@@ -13,6 +13,9 @@ type Point = { x: number; y: number };
 
 type SessionSummary = {
   totalBlinks: number;
+  normalBlinks: number;
+  microBlinks: number;
+
   totalVisibleTimeMs: number;
   totalHiddenTimeMs: number;
   totalSessionTimeMs: number;
@@ -26,10 +29,14 @@ type SessionSummary = {
   blinkIntegralMs: number;
   averageBlinkSpacingMs: number | null;
   blinkSpacingStdMs: number | null;
+  blinkIntervalVarianceMs2: number | null;
+  blinkIntervalSkewness: number | null;
+  blinkRegularityIndex: number | null;
 
   score: number | null;
   grade: string;
   gradeReason: string;
+  finalAdaptiveThresholdSec: number;
 };
 
 function dist(a: Point, b: Point) {
@@ -68,10 +75,13 @@ type UiState = {
   running: boolean;
   calibrating: boolean;
   blinks: number;
+  normalBlinks: number;
+  microBlinks: number;
   blinksPerMin: number;
   secondsSinceBlink: number;
   alertOn: boolean;
   noBlinkThreshold: number;
+  adaptiveThresholdSec: number;
   agreed: boolean;
   error: string | null;
   notifEnabled: boolean;
@@ -85,11 +95,14 @@ type Action =
   | { type: "STOP" }
   | { type: "CALIBRATION_DONE" }
   | { type: "SET_BLINKS"; blinks: number }
+  | { type: "SET_NORMAL_BLINKS"; normalBlinks: number }
+  | { type: "SET_MICRO_BLINKS"; microBlinks: number }
   | { type: "SET_BPM"; bpm: number }
   | { type: "SET_SECONDS"; seconds: number }
   | { type: "ALERT_ON" }
   | { type: "ALERT_OFF" }
   | { type: "SET_THRESHOLD"; seconds: number }
+  | { type: "SET_ADAPTIVE_THRESHOLD"; seconds: number }
   | { type: "AGREE" }
   | { type: "ERROR"; message: string }
   | { type: "CLEAR_ERROR" }
@@ -102,10 +115,13 @@ const initialState: UiState = {
   running: false,
   calibrating: false,
   blinks: 0,
+  normalBlinks: 0,
+  microBlinks: 0,
   blinksPerMin: 0,
   secondsSinceBlink: 0,
   alertOn: false,
   noBlinkThreshold: 10,
+  adaptiveThresholdSec: 10,
   agreed: false,
   error: null,
   notifEnabled: true,
@@ -122,6 +138,7 @@ function reducer(state: UiState, action: Action): UiState {
         running: true,
         calibrating: true,
         noBlinkThreshold: state.noBlinkThreshold,
+        adaptiveThresholdSec: state.noBlinkThreshold,
         agreed: state.agreed,
         notifEnabled: state.notifEnabled,
         notifPermission: state.notifPermission,
@@ -137,6 +154,12 @@ function reducer(state: UiState, action: Action): UiState {
     case "SET_BLINKS":
       return { ...state, blinks: action.blinks };
 
+    case "SET_NORMAL_BLINKS":
+      return { ...state, normalBlinks: action.normalBlinks };
+
+    case "SET_MICRO_BLINKS":
+      return { ...state, microBlinks: action.microBlinks };
+
     case "SET_BPM":
       return { ...state, blinksPerMin: action.bpm };
 
@@ -151,6 +174,9 @@ function reducer(state: UiState, action: Action): UiState {
 
     case "SET_THRESHOLD":
       return { ...state, noBlinkThreshold: action.seconds };
+
+    case "SET_ADAPTIVE_THRESHOLD":
+      return { ...state, adaptiveThresholdSec: action.seconds };
 
     case "AGREE":
       return { ...state, agreed: true };
@@ -198,17 +224,42 @@ function formatSecondsMs(ms: number | null) {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function formatVariance(ms2: number | null) {
+  if (ms2 === null) return "N/A";
+  return `${ms2.toFixed(0)} ms²`;
+}
+
+function formatNumber(value: number | null, digits = 2) {
+  if (value === null) return "N/A";
+  return value.toFixed(digits);
+}
+
 function mean(nums: number[]) {
   if (nums.length === 0) return null;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
-function stdDev(nums: number[]) {
+function variance(nums: number[]) {
   if (nums.length < 2) return null;
   const avg = mean(nums);
   if (avg === null) return null;
-  const variance = nums.reduce((acc, n) => acc + (n - avg) ** 2, 0) / nums.length;
-  return Math.sqrt(variance);
+  return nums.reduce((acc, n) => acc + (n - avg) ** 2, 0) / nums.length;
+}
+
+function stdDev(nums: number[]) {
+  const v = variance(nums);
+  if (v === null) return null;
+  return Math.sqrt(v);
+}
+
+function skewness(nums: number[]) {
+  if (nums.length < 3) return null;
+  const avg = mean(nums);
+  const sd = stdDev(nums);
+  if (avg === null || sd === null || sd <= 1e-9) return null;
+
+  const thirdMoment = nums.reduce((acc, n) => acc + ((n - avg) / sd) ** 3, 0) / nums.length;
+  return thirdMoment;
 }
 
 function drawPoint(ctx: CanvasRenderingContext2D, x: number, y: number, r = 3) {
@@ -242,18 +293,83 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function scoreRange(value: number, idealMin: number, idealMax: number, tolerance: number) {
+function sigmoid(x: number) {
+  return 1 / (1 + Math.exp(-x));
+}
+
+function sigmoidPenalty(deviation: number, midpoint: number, steepness: number, maxPenalty: number) {
+  if (deviation <= 0) return 0;
+  const s = sigmoid(steepness * (deviation - midpoint));
+  return maxPenalty * s;
+}
+
+function scoreRangeSigmoid(
+  value: number,
+  idealMin: number,
+  idealMax: number,
+  midpoint: number,
+  steepness: number
+) {
   if (value >= idealMin && value <= idealMax) return 100;
 
-  if (value < idealMin) {
-    const d = idealMin - value;
-    const x = clamp(d / tolerance, 0, 1);
-    return Math.round(100 * (1 - x * x));
+  let deviation = 0;
+  if (value < idealMin) deviation = idealMin - value;
+  else deviation = value - idealMax;
+
+  const penalty = sigmoidPenalty(deviation, midpoint, steepness, 100);
+  return Math.round(clamp(100 - penalty, 0, 100));
+}
+
+function computeBlinkRegularityIndex(
+  averageBlinkSpacingMs: number | null,
+  blinkSpacingStdMs: number | null,
+  blinkIntervalSkewness: number | null
+) {
+  if (
+    averageBlinkSpacingMs === null ||
+    blinkSpacingStdMs === null ||
+    averageBlinkSpacingMs <= 0
+  ) {
+    return null;
   }
 
-  const d = value - idealMax;
-  const x = clamp(d / tolerance, 0, 1);
-  return Math.round(100 * (1 - x * x));
+  const cv = blinkSpacingStdMs / averageBlinkSpacingMs;
+  const cvPenalty = clamp(cv / 1.0, 0, 1) * 75;
+  const skewPenalty =
+    blinkIntervalSkewness === null ? 0 : clamp(Math.abs(blinkIntervalSkewness) / 2.5, 0, 1) * 25;
+
+  return Math.round(clamp(100 - cvPenalty - skewPenalty, 0, 100));
+}
+
+function computeAdaptiveThresholdSec(args: {
+  baseThresholdSec: number;
+  recentIntervalsMs: number[];
+  blinkRegularityIndex: number | null;
+  microBlinkRatio: number;
+}) {
+  const { baseThresholdSec, recentIntervalsMs, blinkRegularityIndex, microBlinkRatio } = args;
+
+  let threshold = baseThresholdSec;
+  const recentAvg = mean(recentIntervalsMs);
+
+  if (recentAvg !== null) {
+    const recentAvgSec = recentAvg / 1000;
+
+    if (recentAvgSec <= 3.0) threshold += 1.5;
+    else if (recentAvgSec <= 4.0) threshold += 0.5;
+    else if (recentAvgSec >= 6.5) threshold -= 1.5;
+    else if (recentAvgSec >= 5.5) threshold -= 0.5;
+  }
+
+  if (blinkRegularityIndex !== null) {
+    if (blinkRegularityIndex >= 85) threshold += 0.75;
+    else if (blinkRegularityIndex < 60) threshold -= 1.0;
+  }
+
+  if (microBlinkRatio > 0.35) threshold -= 1.0;
+  else if (microBlinkRatio > 0.2) threshold -= 0.5;
+
+  return clamp(Number(threshold.toFixed(1)), 5, 15);
 }
 
 function gradeSession(args: {
@@ -266,6 +382,10 @@ function gradeSession(args: {
   blinkIntegralMs: number;
   averageBlinkSpacingMs: number | null;
   blinkSpacingStdMs: number | null;
+  blinkIntervalVarianceMs2: number | null;
+  blinkIntervalSkewness: number | null;
+  blinkRegularityIndex: number | null;
+  microBlinkRatio: number;
 }) {
   const {
     visibleMs,
@@ -277,6 +397,10 @@ function gradeSession(args: {
     blinkIntegralMs,
     averageBlinkSpacingMs,
     blinkSpacingStdMs,
+    blinkIntervalVarianceMs2,
+    blinkIntervalSkewness,
+    blinkRegularityIndex,
+    microBlinkRatio,
   } = args;
 
   const visibilityPercent = totalMs > 0 ? (visibleMs / totalMs) * 100 : 0;
@@ -295,61 +419,74 @@ function gradeSession(args: {
     };
   }
 
-  const blinkRateScore = scoreRange(bpm, 15, 25, 12);
+  const blinkRateScore = scoreRangeSigmoid(bpm, 15, 25, 4, 0.9);
 
   let sustainedScore = clamp(blinkCompliancePercent, 0, 100);
   if (longestNoBlinkSec > 10) {
-    const extra = clamp((longestNoBlinkSec - 10) / 20, 0, 1);
-    sustainedScore -= extra * 8;
+    sustainedScore -= sigmoidPenalty(longestNoBlinkSec - 10, 4, 0.8, 12);
   }
   sustainedScore = Math.round(clamp(sustainedScore, 0, 100));
 
   const visibilityScore = Math.round(clamp(visibilityPercent, 0, 100));
 
-  let rhythmScore = 100;
+  const rhythmSubscores: number[] = [];
 
   if (averageBlinkSpacingMs !== null) {
     const avgSpacingSec = averageBlinkSpacingMs / 1000;
-    const spacingScore = scoreRange(avgSpacingSec, 3, 5, 4);
-    rhythmScore = Math.round((rhythmScore + spacingScore) / 2);
+    rhythmSubscores.push(scoreRangeSigmoid(avgSpacingSec, 3, 5, 1.4, 1.15));
+  }
+
+  if (blinkRegularityIndex !== null) {
+    rhythmSubscores.push(blinkRegularityIndex);
   }
 
   if (blinkSpacingStdMs !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
     const cv = blinkSpacingStdMs / averageBlinkSpacingMs;
-
-    let consistencyScore = 100;
-    if (cv > 0.35) {
-      const x = clamp((cv - 0.35) / 0.65, 0, 1);
-      consistencyScore = Math.round(100 * (1 - x * x));
-    }
-
-    rhythmScore = Math.round((rhythmScore + consistencyScore) / 2);
+    const cvPenalty = sigmoidPenalty(Math.max(0, cv - 0.25), 0.2, 7, 100);
+    rhythmSubscores.push(Math.round(clamp(100 - cvPenalty, 0, 100)));
   }
+
+  if (blinkIntervalVarianceMs2 !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
+    const normalizedVariance = blinkIntervalVarianceMs2 / (averageBlinkSpacingMs * averageBlinkSpacingMs);
+    const variancePenalty = sigmoidPenalty(Math.max(0, normalizedVariance - 0.08), 0.12, 8, 100);
+    rhythmSubscores.push(Math.round(clamp(100 - variancePenalty, 0, 100)));
+  }
+
+  if (blinkIntervalSkewness !== null) {
+    const skewPenalty = sigmoidPenalty(Math.max(0, Math.abs(blinkIntervalSkewness) - 0.5), 0.5, 4, 100);
+    rhythmSubscores.push(Math.round(clamp(100 - skewPenalty, 0, 100)));
+  }
+
+  const microBlinkPercent = microBlinkRatio * 100;
+  const microBlinkPenalty = sigmoidPenalty(Math.max(0, microBlinkPercent - 10), 10, 0.22, 100);
+  rhythmSubscores.push(Math.round(clamp(100 - microBlinkPenalty, 0, 100)));
+
+  const rhythmScore =
+    rhythmSubscores.length > 0
+      ? Math.round(rhythmSubscores.reduce((a, b) => a + b, 0) / rhythmSubscores.length)
+      : 100;
 
   let sessionQualityScore = 100;
 
   if (visibleMinutes < 1) {
-    const x = clamp((1 - visibleMinutes) / 0.5, 0, 1);
-    sessionQualityScore -= x * 20;
+    sessionQualityScore -= sigmoidPenalty(1 - visibleMinutes, 0.2, 8, 18);
   }
 
   if (blinkIntegralPerMinute < 1800) {
-    const x = clamp((1800 - blinkIntegralPerMinute) / 900, 0, 1);
-    sessionQualityScore -= x * 15;
+    sessionQualityScore -= sigmoidPenalty(1800 - blinkIntegralPerMinute, 350, 0.01, 14);
   }
 
   if (alerts > 0) {
-    const x = clamp(alerts / 8, 0, 1);
-    sessionQualityScore -= x * 10;
+    sessionQualityScore -= sigmoidPenalty(alerts, 2, 1.1, 12);
   }
 
   sessionQualityScore = Math.round(clamp(sessionQualityScore, 0, 100));
 
   const score = Math.round(
-    blinkRateScore * 0.25 +
-      sustainedScore * 0.25 +
-      visibilityScore * 0.15 +
-      rhythmScore * 0.20 +
+    blinkRateScore * 0.22 +
+      sustainedScore * 0.23 +
+      visibilityScore * 0.12 +
+      rhythmScore * 0.28 +
       sessionQualityScore * 0.15
   );
 
@@ -360,17 +497,16 @@ function gradeSession(args: {
   else if (score >= 52) grade = "D";
 
   const reasons: string[] = [];
-
   if (blinkRateScore < 80) reasons.push("blink rate was outside the preferred range");
   if (sustainedScore < 80) reasons.push("there were extended no-blink periods");
   if (visibilityScore < 80) reasons.push("face visibility was not consistent");
-  if (rhythmScore < 80) reasons.push("blink rhythm was inconsistent");
+  if (rhythmScore < 80) reasons.push("blinking was irregular or included too many micro blinks");
   if (sessionQualityScore < 80) reasons.push("session quality was limited");
 
   const gradeReason =
     reasons.length > 0
       ? reasons.join(", ")
-      : "steady blinking, good visibility, and consistent blink behavior";
+      : "steady blinking, good visibility, and regular blink behavior";
 
   return {
     score,
@@ -392,10 +528,13 @@ export default function Page() {
     running,
     calibrating,
     blinks,
+    normalBlinks,
+    microBlinks,
     blinksPerMin,
     secondsSinceBlink,
     alertOn,
     noBlinkThreshold,
+    adaptiveThresholdSec,
     agreed,
     error,
     notifEnabled,
@@ -423,6 +562,7 @@ export default function Page() {
 
   const eyeStateRef = useRef<"OPEN" | "CLOSED">("OPEN");
   const closedFramesRef = useRef(0);
+  const closedStartMsRef = useRef<number | null>(null);
   const lastBlinkMsRef = useRef(0);
 
   const lastBlinkVisibleTotalMsRef = useRef<number | null>(null);
@@ -431,6 +571,9 @@ export default function Page() {
 
   const sessionStartRef = useRef<number | null>(null);
   const blinkCountRef = useRef(0);
+  const normalBlinkCountRef = useRef(0);
+  const microBlinkCountRef = useRef(0);
+
   const totalVisibleTimeMsRef = useRef(0);
   const totalHiddenTimeMsRef = useRef(0);
   const visibleSegmentStartRef = useRef<number | null>(null);
@@ -440,7 +583,10 @@ export default function Page() {
   const longestNoBlinkMsRef = useRef(0);
   const riskyVisibleTimeMsRef = useRef(0);
   const blinkIntegralMsRef = useRef(0);
+
   const blinkIntervalsRef = useRef<number[]>([]);
+  const blinkDurationsRef = useRef<number[]>([]);
+  const adaptiveThresholdRef = useRef(10);
 
   const devMetricsRef = useRef({
     leftEAR: 0,
@@ -467,6 +613,7 @@ export default function Page() {
   const OPEN_RATIO = 0.82;
   const MIN_CLOSED_FRAMES = 2;
   const MIN_BLINK_GAP_MS = 350;
+  const MICRO_BLINK_MS = 120;
   const FACE_LOST_DEBOUNCE_MS = 300;
   const ALERT_REPEAT_MS = 2000;
   const BPM_UPDATE_MS = 400;
@@ -513,6 +660,28 @@ export default function Page() {
     }
   }
 
+  function updateAdaptiveThreshold() {
+    const avgSpacing = mean(blinkIntervalsRef.current);
+    const spacingStd = stdDev(blinkIntervalsRef.current);
+    const spacingSkew = skewness(blinkIntervalsRef.current);
+
+    const blinkRegularityIndex = computeBlinkRegularityIndex(avgSpacing, spacingStd, spacingSkew);
+    const totalBlinksSoFar = blinkCountRef.current;
+    const microBlinkRatio =
+      totalBlinksSoFar > 0 ? microBlinkCountRef.current / totalBlinksSoFar : 0;
+    const recentIntervals = blinkIntervalsRef.current.slice(-6);
+
+    const adaptive = computeAdaptiveThresholdSec({
+      baseThresholdSec: noBlinkThreshold,
+      recentIntervalsMs: recentIntervals,
+      blinkRegularityIndex,
+      microBlinkRatio,
+    });
+
+    adaptiveThresholdRef.current = adaptive;
+    dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: adaptive });
+  }
+
   useEffect(() => {
     if (!mounted) return;
 
@@ -522,6 +691,8 @@ export default function Page() {
         const n = Number(savedThreshold);
         if (Number.isFinite(n) && n > 0) {
           dispatch({ type: "SET_THRESHOLD", seconds: n });
+          dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: n });
+          adaptiveThresholdRef.current = n;
         }
       }
 
@@ -605,6 +776,8 @@ export default function Page() {
 
   function setNoBlinkAlert(seconds: number) {
     dispatch({ type: "SET_THRESHOLD", seconds });
+    dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds });
+    adaptiveThresholdRef.current = seconds;
 
     if (mounted) {
       try {
@@ -621,6 +794,7 @@ export default function Page() {
 
     eyeStateRef.current = "OPEN";
     closedFramesRef.current = 0;
+    closedStartMsRef.current = null;
     lastBlinkMsRef.current = 0;
 
     lastBlinkVisibleTotalMsRef.current = null;
@@ -629,6 +803,9 @@ export default function Page() {
 
     sessionStartRef.current = null;
     blinkCountRef.current = 0;
+    normalBlinkCountRef.current = 0;
+    microBlinkCountRef.current = 0;
+
     totalVisibleTimeMsRef.current = 0;
     totalHiddenTimeMsRef.current = 0;
     visibleSegmentStartRef.current = null;
@@ -638,7 +815,10 @@ export default function Page() {
     longestNoBlinkMsRef.current = 0;
     riskyVisibleTimeMsRef.current = 0;
     blinkIntegralMsRef.current = 0;
+
     blinkIntervalsRef.current = [];
+    blinkDurationsRef.current = [];
+    adaptiveThresholdRef.current = noBlinkThreshold;
 
     devMetricsRef.current = {
       leftEAR: 0,
@@ -655,7 +835,6 @@ export default function Page() {
     };
 
     lastBpmUpdateRef.current = 0;
-
     lastNotifAtRef.current = 0;
     lastAlertOnRef.current = false;
     faceDetectedRef.current = false;
@@ -664,6 +843,11 @@ export default function Page() {
     dispatch({ type: "SET_FACE_DETECTED", detected: false });
     dispatch({ type: "SET_SECONDS", seconds: 0 });
     dispatch({ type: "ALERT_OFF" });
+    dispatch({ type: "SET_BLINKS", blinks: 0 });
+    dispatch({ type: "SET_NORMAL_BLINKS", normalBlinks: 0 });
+    dispatch({ type: "SET_MICRO_BLINKS", microBlinks: 0 });
+    dispatch({ type: "SET_BPM", bpm: 0 });
+    dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: noBlinkThreshold });
 
     const overlay = overlayCanvasRef.current;
     if (overlay) {
@@ -922,6 +1106,7 @@ export default function Page() {
             dispatch({ type: "CALIBRATION_DONE" });
             dispatch({ type: "SET_SECONDS", seconds: 0 });
             dispatch({ type: "ALERT_OFF" });
+            updateAdaptiveThreshold();
           }
 
           return;
@@ -934,6 +1119,7 @@ export default function Page() {
         if (eyeStateRef.current === "OPEN") {
           if (curEar < closeThr) {
             closedFramesRef.current = 1;
+            closedStartMsRef.current = now;
             eyeStateRef.current = "CLOSED";
           }
         } else {
@@ -949,6 +1135,10 @@ export default function Page() {
 
             if (longEnough && farEnough) {
               const currentVisibleTotal = getVisibleTotalMs(now);
+              const blinkDuration =
+                closedStartMsRef.current === null ? 0 : Math.max(0, now - closedStartMsRef.current);
+
+              blinkDurationsRef.current.push(blinkDuration);
 
               if (lastBlinkVisibleTotalMsRef.current !== null) {
                 const spacingMs = Math.max(0, currentVisibleTotal - lastBlinkVisibleTotalMsRef.current);
@@ -957,17 +1147,31 @@ export default function Page() {
                 }
               }
 
+              const isMicroBlink = blinkDuration > 0 && blinkDuration < MICRO_BLINK_MS;
+
               blinkCountRef.current += 1;
               dispatch({ type: "SET_BLINKS", blinks: blinkCountRef.current });
+
+              if (isMicroBlink) {
+                microBlinkCountRef.current += 1;
+                dispatch({ type: "SET_MICRO_BLINKS", microBlinks: microBlinkCountRef.current });
+              } else {
+                normalBlinkCountRef.current += 1;
+                dispatch({ type: "SET_NORMAL_BLINKS", normalBlinks: normalBlinkCountRef.current });
+              }
+
               lastBlinkMsRef.current = now;
               lastBlinkVisibleTotalMsRef.current = currentVisibleTotal;
               dispatch({ type: "SET_SECONDS", seconds: 0 });
               dispatch({ type: "ALERT_OFF" });
               lastAlertOnRef.current = false;
+
+              updateAdaptiveThreshold();
             }
 
             eyeStateRef.current = "OPEN";
             closedFramesRef.current = 0;
+            closedStartMsRef.current = null;
           }
         }
 
@@ -983,7 +1187,9 @@ export default function Page() {
         const sec = visibleElapsedMs / 1000;
         dispatch({ type: "SET_SECONDS", seconds: sec });
 
-        if (sec >= noBlinkThreshold) {
+        const currentAdaptiveThreshold = adaptiveThresholdRef.current;
+
+        if (sec >= currentAdaptiveThreshold) {
           riskyVisibleTimeMsRef.current += deltaMs;
           dispatch({ type: "ALERT_ON" });
 
@@ -1050,8 +1256,18 @@ export default function Page() {
     const totalSessionTime =
       sessionStartRef.current !== null ? Math.max(0, now - sessionStartRef.current) : totalVisible + totalHidden;
     const averageBlinksPerMinute = totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
+
     const averageBlinkSpacingMs = mean(blinkIntervalsRef.current);
     const blinkSpacingStdMs = stdDev(blinkIntervalsRef.current);
+    const blinkIntervalVarianceMs2 = variance(blinkIntervalsRef.current);
+    const blinkIntervalSkewness = skewness(blinkIntervalsRef.current);
+    const blinkRegularityIndex = computeBlinkRegularityIndex(
+      averageBlinkSpacingMs,
+      blinkSpacingStdMs,
+      blinkIntervalSkewness
+    );
+    const microBlinkRatio =
+      blinkCountRef.current > 0 ? microBlinkCountRef.current / blinkCountRef.current : 0;
 
     const grading = gradeSession({
       visibleMs: totalVisible,
@@ -1063,10 +1279,17 @@ export default function Page() {
       blinkIntegralMs: blinkIntegralMsRef.current,
       averageBlinkSpacingMs,
       blinkSpacingStdMs,
+      blinkIntervalVarianceMs2,
+      blinkIntervalSkewness,
+      blinkRegularityIndex,
+      microBlinkRatio,
     });
 
     const summary: SessionSummary = {
       totalBlinks: blinkCountRef.current,
+      normalBlinks: normalBlinkCountRef.current,
+      microBlinks: microBlinkCountRef.current,
+
       totalVisibleTimeMs: totalVisible,
       totalHiddenTimeMs: totalHidden,
       totalSessionTimeMs: totalSessionTime,
@@ -1080,10 +1303,14 @@ export default function Page() {
       blinkIntegralMs: blinkIntegralMsRef.current,
       averageBlinkSpacingMs,
       blinkSpacingStdMs,
+      blinkIntervalVarianceMs2,
+      blinkIntervalSkewness,
+      blinkRegularityIndex,
 
       score: grading.score,
       grade: grading.grade,
       gradeReason: grading.gradeReason,
+      finalAdaptiveThresholdSec: adaptiveThresholdRef.current,
     };
 
     setSessionSummary(summary);
@@ -1131,7 +1358,7 @@ export default function Page() {
         : !faceDetected
           ? "No face detected — alarm paused."
           : alertOn
-            ? "BLINK! (alert repeats until you blink)"
+            ? "BLINK! (adaptive alert repeats until you blink)"
             : "Monitoring…";
 
   const canUseNotifications = mounted && "Notification" in window;
@@ -1180,12 +1407,12 @@ export default function Page() {
                 opacity: 0.95,
               }}
             >
-              Alarm threshold: <b>{noBlinkThreshold}s</b> • Beep repeats every{" "}
-              <b>{(ALERT_REPEAT_MS / 1000).toFixed(1)}s</b>
+              Base threshold: <b>{noBlinkThreshold}s</b> • Current adaptive threshold: <b>{adaptiveThresholdSec}s</b>
+              {" "}• Beep repeats every <b>{(ALERT_REPEAT_MS / 1000).toFixed(1)}s</b>
             </div>
 
             <div style={{ marginTop: 14, fontSize: 13, opacity: 0.75 }}>
-              Tip: The alarm stops automatically after you blink.
+              Tip: The adaptive threshold changes based on recent blink behavior.
             </div>
           </div>
         </div>
@@ -1231,11 +1458,8 @@ export default function Page() {
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
         <button
           onClick={() => {
-            if (running) {
-              stop();
-            } else {
-              void start();
-            }
+            if (running) stop();
+            else void start();
           }}
           style={{ padding: "8px 14px", cursor: agreed ? "pointer" : "not-allowed", opacity: agreed ? 1 : 0.5 }}
           disabled={!agreed}
@@ -1263,7 +1487,7 @@ export default function Page() {
 
         <div style={{ marginLeft: 8 }}>
           <label style={{ opacity: 0.9 }}>
-            Alert if no blink for{" "}
+            Base alert if no blink for{" "}
             <select
               value={noBlinkThreshold}
               onChange={(e) => setNoBlinkAlert(Number(e.target.value))}
@@ -1327,7 +1551,7 @@ export default function Page() {
         {sessionSummary && !running ? (
           <div
             style={{
-              width: "min(760px, 100%)",
+              width: "min(820px, 100%)",
               minHeight: 480,
               background: "#111",
               border: "1px solid #333",
@@ -1341,51 +1565,27 @@ export default function Page() {
             <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>Session Summary</div>
 
             <div style={{ lineHeight: 1.9, fontSize: 17 }}>
-              <div>
-                <b>Total blinks:</b> {sessionSummary.totalBlinks}
-              </div>
-              <div>
-                <b>Total alerts:</b> {sessionSummary.totalAlerts}
-              </div>
-              <div>
-                <b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}
-              </div>
-              <div>
-                <b>Total hidden time:</b> {formatDuration(sessionSummary.totalHiddenTimeMs)}
-              </div>
-              <div>
-                <b>Total session time:</b> {formatDuration(sessionSummary.totalSessionTimeMs)}
-              </div>
-              <div>
-                <b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}
-              </div>
-              <div>
-                <b>Longest no-blink streak:</b> {formatDuration(sessionSummary.longestNoBlinkMs)}
-              </div>
-              <div>
-                <b>Face visibility:</b> {sessionSummary.visibilityPercent.toFixed(1)}%
-              </div>
-              <div>
-                <b>Blink compliance:</b> {sessionSummary.blinkCompliancePercent.toFixed(1)}%
-              </div>
-              <div>
-                <b>Blink integral:</b> {formatSecondsMs(sessionSummary.blinkIntegralMs)} total eye-closure time
-              </div>
-              <div>
-                <b>Average blink spacing:</b> {formatSecondsMs(sessionSummary.averageBlinkSpacingMs)}
-              </div>
-              <div>
-                <b>Blink spacing std dev:</b> {formatSecondsMs(sessionSummary.blinkSpacingStdMs)}
-              </div>
-              <div>
-                <b>Session score:</b> {sessionSummary.score === null ? "N/A" : `${sessionSummary.score}/100`}
-              </div>
-              <div>
-                <b>Grade:</b> {sessionSummary.grade}
-              </div>
-              <div>
-                <b>Why:</b> {sessionSummary.gradeReason}
-              </div>
+              <div><b>Total blinks:</b> {sessionSummary.totalBlinks}</div>
+              <div><b>Normal blinks:</b> {sessionSummary.normalBlinks}</div>
+              <div><b>Micro blinks:</b> {sessionSummary.microBlinks}</div>
+              <div><b>Total alerts:</b> {sessionSummary.totalAlerts}</div>
+              <div><b>Total visible time:</b> {formatDuration(sessionSummary.totalVisibleTimeMs)}</div>
+              <div><b>Total hidden time:</b> {formatDuration(sessionSummary.totalHiddenTimeMs)}</div>
+              <div><b>Total session time:</b> {formatDuration(sessionSummary.totalSessionTimeMs)}</div>
+              <div><b>Average blinks / min:</b> {sessionSummary.averageBlinksPerMinute.toFixed(1)}</div>
+              <div><b>Longest no-blink streak:</b> {formatDuration(sessionSummary.longestNoBlinkMs)}</div>
+              <div><b>Face visibility:</b> {sessionSummary.visibilityPercent.toFixed(1)}%</div>
+              <div><b>Blink compliance:</b> {sessionSummary.blinkCompliancePercent.toFixed(1)}%</div>
+              <div><b>Blink integral:</b> {formatSecondsMs(sessionSummary.blinkIntegralMs)} total eye-closure time</div>
+              <div><b>Average blink spacing:</b> {formatSecondsMs(sessionSummary.averageBlinkSpacingMs)}</div>
+              <div><b>Blink spacing std dev:</b> {formatSecondsMs(sessionSummary.blinkSpacingStdMs)}</div>
+              <div><b>Blink interval variance:</b> {formatVariance(sessionSummary.blinkIntervalVarianceMs2)}</div>
+              <div><b>Blink interval skewness:</b> {formatNumber(sessionSummary.blinkIntervalSkewness, 2)}</div>
+              <div><b>Blink regularity index:</b> {formatNumber(sessionSummary.blinkRegularityIndex, 0)}</div>
+              <div><b>Final adaptive threshold:</b> {sessionSummary.finalAdaptiveThresholdSec.toFixed(1)}s</div>
+              <div><b>Session score:</b> {sessionSummary.score === null ? "N/A" : `${sessionSummary.score}/100`}</div>
+              <div><b>Grade:</b> {sessionSummary.grade}</div>
+              <div><b>Why:</b> {sessionSummary.gradeReason}</div>
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
@@ -1453,15 +1653,12 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 14, lineHeight: 1.7 }}>
-        <div>
-          <b>Blinks:</b> {blinks}
-        </div>
-        <div>
-          <b>Blinks / min:</b> {blinksPerMin.toFixed(1)}
-        </div>
-        <div>
-          <b>Seconds since last blink:</b> {secondsSinceBlink.toFixed(1)}
-        </div>
+        <div><b>Total blinks:</b> {blinks}</div>
+        <div><b>Normal blinks:</b> {normalBlinks}</div>
+        <div><b>Micro blinks:</b> {microBlinks}</div>
+        <div><b>Blinks / min:</b> {blinksPerMin.toFixed(1)}</div>
+        <div><b>Seconds since last blink:</b> {secondsSinceBlink.toFixed(1)}</div>
+        <div><b>Adaptive threshold:</b> {adaptiveThresholdSec.toFixed(1)}s</div>
         <div style={{ opacity: 0.75 }}>Tip: if you don’t hear sound, click once on the page (browser audio rule).</div>
       </div>
 
