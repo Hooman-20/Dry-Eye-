@@ -242,15 +242,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function smoothPenalty(distance: number, maxDistance: number, maxPenalty: number) {
-  const x = clamp(distance / maxDistance, 0, 1);
-  return maxPenalty * x * x;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function scoreRange(value: number, idealMin: number, idealMax: number, tolerance: number) {
   if (value >= idealMin && value <= idealMax) return 100;
 
@@ -304,35 +295,23 @@ function gradeSession(args: {
     };
   }
 
-  // 1) Blink rate score
   const blinkRateScore = scoreRange(bpm, 15, 25, 12);
 
-  // 2) Sustained blinking behavior score
-  // Use compliance as the main signal, then only lightly adjust for alerts / longest streak
   let sustainedScore = clamp(blinkCompliancePercent, 0, 100);
-
   if (longestNoBlinkSec > 10) {
-    const extra = clamp((longestNoBlinkSec - 10) / 15, 0, 1);
-    sustainedScore -= extra * 15;
+    const extra = clamp((longestNoBlinkSec - 10) / 20, 0, 1);
+    sustainedScore -= extra * 8;
   }
-
-  if (alerts > 0) {
-    const extra = clamp(alerts / 6, 0, 1);
-    sustainedScore -= extra * 10;
-  }
-
   sustainedScore = Math.round(clamp(sustainedScore, 0, 100));
 
-  // 3) Visibility score
   const visibilityScore = Math.round(clamp(visibilityPercent, 0, 100));
 
-  // 4) Rhythm score
   let rhythmScore = 100;
 
   if (averageBlinkSpacingMs !== null) {
     const avgSpacingSec = averageBlinkSpacingMs / 1000;
     const spacingScore = scoreRange(avgSpacingSec, 3, 5, 4);
-    rhythmScore = Math.min(rhythmScore, spacingScore);
+    rhythmScore = Math.round((rhythmScore + spacingScore) / 2);
   }
 
   if (blinkSpacingStdMs !== null && averageBlinkSpacingMs !== null && averageBlinkSpacingMs > 0) {
@@ -347,7 +326,6 @@ function gradeSession(args: {
     rhythmScore = Math.round((rhythmScore + consistencyScore) / 2);
   }
 
-  // 5) Session quality score
   let sessionQualityScore = 100;
 
   if (visibleMinutes < 1) {
@@ -360,22 +338,26 @@ function gradeSession(args: {
     sessionQualityScore -= x * 15;
   }
 
+  if (alerts > 0) {
+    const x = clamp(alerts / 8, 0, 1);
+    sessionQualityScore -= x * 10;
+  }
+
   sessionQualityScore = Math.round(clamp(sessionQualityScore, 0, 100));
 
-  // Final weighted score
   const score = Math.round(
-    blinkRateScore * 0.30 +
-    sustainedScore * 0.30 +
-    visibilityScore * 0.15 +
-    rhythmScore * 0.15 +
-    sessionQualityScore * 0.10
+    blinkRateScore * 0.25 +
+      sustainedScore * 0.25 +
+      visibilityScore * 0.15 +
+      rhythmScore * 0.20 +
+      sessionQualityScore * 0.15
   );
 
   let grade = "F";
-  if (score >= 90) grade = "A";
-  else if (score >= 80) grade = "B";
-  else if (score >= 70) grade = "C";
-  else if (score >= 60) grade = "D";
+  if (score >= 88) grade = "A";
+  else if (score >= 76) grade = "B";
+  else if (score >= 64) grade = "C";
+  else if (score >= 52) grade = "D";
 
   const reasons: string[] = [];
 
@@ -895,7 +877,6 @@ export default function Page() {
               drawLine(octx, rp2.x, rp2.y, rp6.x, rp6.y);
               drawLine(octx, rp3.x, rp3.y, rp5.x, rp5.y);
 
-              // Small green eyelid opening indicators
               octx.strokeStyle = "#00ff88";
               octx.lineWidth = 3;
 
@@ -905,14 +886,12 @@ export default function Page() {
               drawLine(octx, rightMid1.x + 14, rightMid1.y, rightMid1.x + 14, rightMid1.y - rightV1);
               drawLine(octx, rightMid2.x + 20, rightMid2.y, rightMid2.x + 20, rightMid2.y - rightV2);
 
-              // Labels near each eye opening measurement
               drawMeasurementLabel(octx, leftMid1.x - 68, leftMid1.y - 6, `${leftV1.toFixed(1)} px`);
               drawMeasurementLabel(octx, leftMid2.x - 74, leftMid2.y + 18, `${leftV2.toFixed(1)} px`);
 
               drawMeasurementLabel(octx, rightMid1.x + 18, rightMid1.y - 6, `${rightV1.toFixed(1)} px`);
               drawMeasurementLabel(octx, rightMid2.x + 24, rightMid2.y + 18, `${rightV2.toFixed(1)} px`);
 
-              // Summary text
               octx.fillStyle = "#ffffff";
               octx.font = "16px Arial";
               octx.fillText(`Left EAR: ${left.toFixed(3)}`, 16, 28);
@@ -1024,11 +1003,11 @@ export default function Page() {
         }
 
         const visibleMinutes = getVisibleTotalMs(now) / 60000;
-        const bpm = visibleMinutes > 0 ? blinkCountRef.current / visibleMinutes : 0;
+        const bpmNow = visibleMinutes > 0 ? blinkCountRef.current / visibleMinutes : 0;
 
         if (now - lastBpmUpdateRef.current >= BPM_UPDATE_MS) {
           lastBpmUpdateRef.current = now;
-          dispatch({ type: "SET_BPM", bpm });
+          dispatch({ type: "SET_BPM", bpm: bpmNow });
         }
       });
 
