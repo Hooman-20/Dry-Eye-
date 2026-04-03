@@ -39,6 +39,16 @@ type SessionSummary = {
   finalAdaptiveThresholdSec: number;
 };
 
+type UserBlinkProfile = {
+  avgBlinkSpacingMs: number | null;
+  avgBpm: number | null;
+  microBlinkRatio: number | null;
+  regularityIndex: number | null;
+  preferredThresholdSec: number;
+  totalSessions: number;
+  updatedAt: number;
+};
+
 function dist(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -372,6 +382,73 @@ function computeAdaptiveThresholdSec(args: {
   return clamp(Number(threshold.toFixed(1)), 5, 15);
 }
 
+function getStoredProfile(): UserBlinkProfile | null {
+  try {
+    const raw = localStorage.getItem("userBlinkProfile");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredProfile(profile: UserBlinkProfile) {
+  try {
+    localStorage.setItem("userBlinkProfile", JSON.stringify(profile));
+  } catch {
+    // ignore
+  }
+}
+
+function averageNullable(oldValue: number | null, newValue: number | null, count: number) {
+  if (newValue === null) return oldValue;
+  if (oldValue === null) return newValue;
+  return (oldValue * count + newValue) / (count + 1);
+}
+
+function computePersonalThreshold(args: {
+  avgBlinkSpacingMs: number | null;
+  avgBpm: number | null;
+  microBlinkRatio: number | null;
+  regularityIndex: number | null;
+  fallbackThresholdSec: number;
+}) {
+  const {
+    avgBlinkSpacingMs,
+    avgBpm,
+    microBlinkRatio,
+    regularityIndex,
+    fallbackThresholdSec,
+  } = args;
+
+  let threshold = fallbackThresholdSec;
+
+  if (avgBlinkSpacingMs !== null) {
+    const spacingSec = avgBlinkSpacingMs / 1000;
+
+    if (spacingSec >= 5.5) threshold += 1.5;
+    else if (spacingSec >= 4.5) threshold += 0.75;
+    else if (spacingSec <= 3.0) threshold -= 1.0;
+    else if (spacingSec <= 3.5) threshold -= 0.5;
+  }
+
+  if (avgBpm !== null) {
+    if (avgBpm < 12) threshold += 0.75;
+    else if (avgBpm > 24) threshold -= 0.75;
+  }
+
+  if (microBlinkRatio !== null) {
+    if (microBlinkRatio > 0.35) threshold -= 1.0;
+    else if (microBlinkRatio > 0.2) threshold -= 0.5;
+  }
+
+  if (regularityIndex !== null) {
+    if (regularityIndex >= 85) threshold += 0.5;
+    else if (regularityIndex < 60) threshold -= 0.75;
+  }
+
+  return clamp(Number(threshold.toFixed(1)), 5, 15);
+}
+
 function gradeSession(args: {
   visibleMs: number;
   totalMs: number;
@@ -686,17 +763,27 @@ export default function Page() {
     if (!mounted) return;
 
     try {
+      const savedProfile = getStoredProfile();
       const savedThreshold = localStorage.getItem("noBlinkThreshold");
+      const savedNotif = localStorage.getItem("notifEnabled");
+
+      let initialThreshold = 10;
+
+      if (savedProfile && Number.isFinite(savedProfile.preferredThresholdSec)) {
+        initialThreshold = savedProfile.preferredThresholdSec;
+      }
+
       if (savedThreshold) {
         const n = Number(savedThreshold);
         if (Number.isFinite(n) && n > 0) {
-          dispatch({ type: "SET_THRESHOLD", seconds: n });
-          dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: n });
-          adaptiveThresholdRef.current = n;
+          initialThreshold = n;
         }
       }
 
-      const savedNotif = localStorage.getItem("notifEnabled");
+      dispatch({ type: "SET_THRESHOLD", seconds: initialThreshold });
+      dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: initialThreshold });
+      adaptiveThresholdRef.current = initialThreshold;
+
       if (savedNotif !== null) {
         dispatch({ type: "SET_NOTIF_ENABLED", enabled: savedNotif === "true" });
       }
@@ -782,6 +869,15 @@ export default function Page() {
     if (mounted) {
       try {
         localStorage.setItem("noBlinkThreshold", String(seconds));
+
+        const existingProfile = getStoredProfile();
+        if (existingProfile) {
+          saveStoredProfile({
+            ...existingProfile,
+            preferredThresholdSec: seconds,
+            updatedAt: Date.now(),
+          });
+        }
       } catch {}
     }
   }
@@ -1312,6 +1408,64 @@ export default function Page() {
       gradeReason: grading.gradeReason,
       finalAdaptiveThresholdSec: adaptiveThresholdRef.current,
     };
+
+    try {
+      const oldProfile = getStoredProfile();
+      const oldCount = oldProfile?.totalSessions ?? 0;
+
+      const mergedAvgSpacing = averageNullable(
+        oldProfile?.avgBlinkSpacingMs ?? null,
+        averageBlinkSpacingMs,
+        oldCount
+      );
+
+      const mergedAvgBpm = averageNullable(
+        oldProfile?.avgBpm ?? null,
+        averageBlinksPerMinute,
+        oldCount
+      );
+
+      const mergedMicroRatio = averageNullable(
+        oldProfile?.microBlinkRatio ?? null,
+        microBlinkRatio,
+        oldCount
+      );
+
+      const mergedRegularity = averageNullable(
+        oldProfile?.regularityIndex ?? null,
+        blinkRegularityIndex,
+        oldCount
+      );
+
+      const manualThresholdRaw = localStorage.getItem("noBlinkThreshold");
+      const fallbackThresholdSec = manualThresholdRaw
+        ? Number(manualThresholdRaw)
+        : noBlinkThreshold;
+
+      const preferredThresholdSec = computePersonalThreshold({
+        avgBlinkSpacingMs: mergedAvgSpacing,
+        avgBpm: mergedAvgBpm,
+        microBlinkRatio: mergedMicroRatio,
+        regularityIndex: mergedRegularity,
+        fallbackThresholdSec: Number.isFinite(fallbackThresholdSec) ? fallbackThresholdSec : 10,
+      });
+
+      saveStoredProfile({
+        avgBlinkSpacingMs: mergedAvgSpacing,
+        avgBpm: mergedAvgBpm,
+        microBlinkRatio: mergedMicroRatio,
+        regularityIndex: mergedRegularity,
+        preferredThresholdSec,
+        totalSessions: oldCount + 1,
+        updatedAt: Date.now(),
+      });
+
+      dispatch({ type: "SET_THRESHOLD", seconds: preferredThresholdSec });
+      dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: preferredThresholdSec });
+      adaptiveThresholdRef.current = preferredThresholdSec;
+    } catch {
+      // ignore
+    }
 
     setSessionSummary(summary);
     dispatch({ type: "STOP" });
