@@ -2,6 +2,9 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 
+import { collection, addDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+
 declare global {
   interface Window {
     FaceMesh?: any;
@@ -595,10 +598,29 @@ function gradeSession(args: {
 }
 
 export default function Page() {
+  
   const [mounted, setMounted] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+  if (!mounted) return;
+
+  let savedUserId = localStorage.getItem("userId");
+
+  if (!savedUserId) {
+    savedUserId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "user-" + Math.random().toString(36).substring(2) + Date.now();
+
+    localStorage.setItem("userId", savedUserId);
+  }
+
+  setUserId(savedUserId);
+}, [mounted]);
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const {
@@ -1343,139 +1365,160 @@ export default function Page() {
     }
   }
 
-  function stop() {
-    const now = performance.now();
-    finalizeTiming(now);
+  async function stop() {
+  const now = performance.now();
+  finalizeTiming(now);
 
-    const totalVisible = totalVisibleTimeMsRef.current;
-    const totalHidden = totalHiddenTimeMsRef.current;
-    const totalSessionTime =
-      sessionStartRef.current !== null ? Math.max(0, now - sessionStartRef.current) : totalVisible + totalHidden;
-    const averageBlinksPerMinute = totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
+  const totalVisible = totalVisibleTimeMsRef.current;
+  const totalHidden = totalHiddenTimeMsRef.current;
+  const totalSessionTime =
+    sessionStartRef.current !== null
+      ? Math.max(0, now - sessionStartRef.current)
+      : totalVisible + totalHidden;
 
-    const averageBlinkSpacingMs = mean(blinkIntervalsRef.current);
-    const blinkSpacingStdMs = stdDev(blinkIntervalsRef.current);
-    const blinkIntervalVarianceMs2 = variance(blinkIntervalsRef.current);
-    const blinkIntervalSkewness = skewness(blinkIntervalsRef.current);
-    const blinkRegularityIndex = computeBlinkRegularityIndex(
+  const averageBlinksPerMinute =
+    totalVisible > 0 ? blinkCountRef.current / (totalVisible / 60000) : 0;
+
+  const averageBlinkSpacingMs = mean(blinkIntervalsRef.current);
+  const blinkSpacingStdMs = stdDev(blinkIntervalsRef.current);
+  const blinkIntervalVarianceMs2 = variance(blinkIntervalsRef.current);
+  const blinkIntervalSkewness = skewness(blinkIntervalsRef.current);
+
+  const blinkRegularityIndex = computeBlinkRegularityIndex(
+    averageBlinkSpacingMs,
+    blinkSpacingStdMs,
+    blinkIntervalSkewness
+  );
+
+  const microBlinkRatio =
+    blinkCountRef.current > 0
+      ? microBlinkCountRef.current / blinkCountRef.current
+      : 0;
+
+  const grading = gradeSession({
+    visibleMs: totalVisible,
+    totalMs: totalSessionTime,
+    bpm: averageBlinksPerMinute,
+    alerts: alertCountRef.current,
+    longestNoBlinkMs: longestNoBlinkMsRef.current,
+    riskyVisibleMs: riskyVisibleTimeMsRef.current,
+    blinkIntegralMs: blinkIntegralMsRef.current,
+    averageBlinkSpacingMs,
+    blinkSpacingStdMs,
+    blinkIntervalVarianceMs2,
+    blinkIntervalSkewness,
+    blinkRegularityIndex,
+    microBlinkRatio,
+  });
+
+  const summary: SessionSummary = {
+    totalBlinks: blinkCountRef.current,
+    normalBlinks: normalBlinkCountRef.current,
+    microBlinks: microBlinkCountRef.current,
+
+    totalVisibleTimeMs: totalVisible,
+    totalHiddenTimeMs: totalHidden,
+    totalSessionTimeMs: totalSessionTime,
+    averageBlinksPerMinute,
+
+    totalAlerts: alertCountRef.current,
+    longestNoBlinkMs: longestNoBlinkMsRef.current,
+    visibilityPercent: grading.visibilityPercent,
+    blinkCompliancePercent: grading.blinkCompliancePercent,
+
+    blinkIntegralMs: blinkIntegralMsRef.current,
+    averageBlinkSpacingMs,
+    blinkSpacingStdMs,
+    blinkIntervalVarianceMs2,
+    blinkIntervalSkewness,
+    blinkRegularityIndex,
+
+    score: grading.score,
+    grade: grading.grade,
+    gradeReason: grading.gradeReason,
+    finalAdaptiveThresholdSec: adaptiveThresholdRef.current,
+  };
+
+  try {
+    const oldProfile = getStoredProfile();
+    const oldCount = oldProfile?.totalSessions ?? 0;
+
+    const mergedAvgSpacing = averageNullable(
+      oldProfile?.avgBlinkSpacingMs ?? null,
       averageBlinkSpacingMs,
-      blinkSpacingStdMs,
-      blinkIntervalSkewness
+      oldCount
     );
-    const microBlinkRatio =
-      blinkCountRef.current > 0 ? microBlinkCountRef.current / blinkCountRef.current : 0;
 
-    const grading = gradeSession({
-      visibleMs: totalVisible,
-      totalMs: totalSessionTime,
-      bpm: averageBlinksPerMinute,
-      alerts: alertCountRef.current,
-      longestNoBlinkMs: longestNoBlinkMsRef.current,
-      riskyVisibleMs: riskyVisibleTimeMsRef.current,
-      blinkIntegralMs: blinkIntegralMsRef.current,
-      averageBlinkSpacingMs,
-      blinkSpacingStdMs,
-      blinkIntervalVarianceMs2,
-      blinkIntervalSkewness,
-      blinkRegularityIndex,
+    const mergedAvgBpm = averageNullable(
+      oldProfile?.avgBpm ?? null,
+      averageBlinksPerMinute,
+      oldCount
+    );
+
+    const mergedMicroRatio = averageNullable(
+      oldProfile?.microBlinkRatio ?? null,
       microBlinkRatio,
+      oldCount
+    );
+
+    const mergedRegularity = averageNullable(
+      oldProfile?.regularityIndex ?? null,
+      blinkRegularityIndex,
+      oldCount
+    );
+
+    const manualThresholdRaw = localStorage.getItem("noBlinkThreshold");
+    const fallbackThresholdSec = manualThresholdRaw
+      ? Number(manualThresholdRaw)
+      : noBlinkThreshold;
+
+    const preferredThresholdSec = computePersonalThreshold({
+      avgBlinkSpacingMs: mergedAvgSpacing,
+      avgBpm: mergedAvgBpm,
+      microBlinkRatio: mergedMicroRatio,
+      regularityIndex: mergedRegularity,
+      fallbackThresholdSec: Number.isFinite(fallbackThresholdSec) ? fallbackThresholdSec : 10,
     });
 
-    const summary: SessionSummary = {
-      totalBlinks: blinkCountRef.current,
-      normalBlinks: normalBlinkCountRef.current,
-      microBlinks: microBlinkCountRef.current,
+    saveStoredProfile({
+      avgBlinkSpacingMs: mergedAvgSpacing,
+      avgBpm: mergedAvgBpm,
+      microBlinkRatio: mergedMicroRatio,
+      regularityIndex: mergedRegularity,
+      preferredThresholdSec,
+      totalSessions: oldCount + 1,
+      updatedAt: Date.now(),
+    });
 
-      totalVisibleTimeMs: totalVisible,
-      totalHiddenTimeMs: totalHidden,
-      totalSessionTimeMs: totalSessionTime,
-      averageBlinksPerMinute,
-
-      totalAlerts: alertCountRef.current,
-      longestNoBlinkMs: longestNoBlinkMsRef.current,
-      visibilityPercent: grading.visibilityPercent,
-      blinkCompliancePercent: grading.blinkCompliancePercent,
-
-      blinkIntegralMs: blinkIntegralMsRef.current,
-      averageBlinkSpacingMs,
-      blinkSpacingStdMs,
-      blinkIntervalVarianceMs2,
-      blinkIntervalSkewness,
-      blinkRegularityIndex,
-
-      score: grading.score,
-      grade: grading.grade,
-      gradeReason: grading.gradeReason,
-      finalAdaptiveThresholdSec: adaptiveThresholdRef.current,
-    };
-
-    try {
-      const oldProfile = getStoredProfile();
-      const oldCount = oldProfile?.totalSessions ?? 0;
-
-      const mergedAvgSpacing = averageNullable(
-        oldProfile?.avgBlinkSpacingMs ?? null,
-        averageBlinkSpacingMs,
-        oldCount
-      );
-
-      const mergedAvgBpm = averageNullable(
-        oldProfile?.avgBpm ?? null,
-        averageBlinksPerMinute,
-        oldCount
-      );
-
-      const mergedMicroRatio = averageNullable(
-        oldProfile?.microBlinkRatio ?? null,
-        microBlinkRatio,
-        oldCount
-      );
-
-      const mergedRegularity = averageNullable(
-        oldProfile?.regularityIndex ?? null,
-        blinkRegularityIndex,
-        oldCount
-      );
-
-      const manualThresholdRaw = localStorage.getItem("noBlinkThreshold");
-      const fallbackThresholdSec = manualThresholdRaw
-        ? Number(manualThresholdRaw)
-        : noBlinkThreshold;
-
-      const preferredThresholdSec = computePersonalThreshold({
-        avgBlinkSpacingMs: mergedAvgSpacing,
-        avgBpm: mergedAvgBpm,
-        microBlinkRatio: mergedMicroRatio,
-        regularityIndex: mergedRegularity,
-        fallbackThresholdSec: Number.isFinite(fallbackThresholdSec) ? fallbackThresholdSec : 10,
-      });
-
-      saveStoredProfile({
-        avgBlinkSpacingMs: mergedAvgSpacing,
-        avgBpm: mergedAvgBpm,
-        microBlinkRatio: mergedMicroRatio,
-        regularityIndex: mergedRegularity,
-        preferredThresholdSec,
-        totalSessions: oldCount + 1,
-        updatedAt: Date.now(),
-      });
-
-      dispatch({ type: "SET_THRESHOLD", seconds: preferredThresholdSec });
-      dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: preferredThresholdSec });
-      adaptiveThresholdRef.current = preferredThresholdSec;
-    } catch {
-      // ignore
-    }
-
-    setSessionSummary(summary);
-    dispatch({ type: "STOP" });
-    cleanupLoopsAndStream();
-
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
+    dispatch({ type: "SET_THRESHOLD", seconds: preferredThresholdSec });
+    dispatch({ type: "SET_ADAPTIVE_THRESHOLD", seconds: preferredThresholdSec });
+    adaptiveThresholdRef.current = preferredThresholdSec;
+  } catch {
+    // ignore
   }
+
+  if (!userId) return; 
+
+  try {
+    await addDoc(collection(db, "sessions"), {
+      userId,
+      ...summary,
+      createdAt: Date.now(),
+    });
+    console.log("Session saved to Firebase");
+  } catch (err) {
+    console.error("Firebase save error:", err);
+  }
+
+  setSessionSummary(summary);
+  dispatch({ type: "STOP" });
+  cleanupLoopsAndStream();
+
+  if (audioCtxRef.current) {
+    audioCtxRef.current.close().catch(() => {});
+    audioCtxRef.current = null;
+  }
+}
 
   useEffect(() => {
     if (!mounted) return;
