@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useReducer, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { collection, addDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import { auth, db, isFirebaseConfigured } from "@/lib/firebase";
 
 declare global {
   interface Window {
@@ -598,29 +600,31 @@ function gradeSession(args: {
 }
 
 export default function Page() {
-  
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-  if (!mounted) return;
+    if (!auth) {
+      setAuthLoading(false);
+      return;
+    }
 
-  let savedUserId = localStorage.getItem("userId");
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
 
-  if (!savedUserId) {
-    savedUserId =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : "user-" + Math.random().toString(36).substring(2) + Date.now();
+      if (!currentUser) {
+        router.replace("/login");
+      }
+    });
 
-    localStorage.setItem("userId", savedUserId);
-  }
-
-  setUserId(savedUserId);
-}, [mounted]);
+    return () => unsub();
+  }, [router]);
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const {
@@ -1497,11 +1501,11 @@ export default function Page() {
     // ignore
   }
 
-  if (!userId) return; 
+  if (!db || !user) return;
 
   try {
     await addDoc(collection(db, "sessions"), {
-      userId,
+      userId: user.uid,
       ...summary,
       createdAt: Date.now(),
     });
@@ -1560,9 +1564,40 @@ export default function Page() {
 
   const canUseNotifications = mounted && "Notification" in window;
 
+  if (authLoading || !user) {
+    return (
+      <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
+        Checking authentication...
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
-      <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 14, opacity: 0.85 }}>
+            {user.email ? `Signed in as ${user.email}` : `Signed in as ${user.uid}`}
+          </span>
+          <button
+            onClick={async () => {
+              if (!auth) return;
+              await signOut(auth);
+              router.replace("/login");
+            }}
+            style={{ padding: "8px 14px", cursor: "pointer" }}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+
+      {!isFirebaseConfigured && (
+        <p style={{ marginTop: 10, color: "#ffcc66" }}>
+          Firebase config is missing. Add NEXT_PUBLIC_FIREBASE_* variables in your environment.
+        </p>
+      )}
 
       {running && !calibrating && alertOn && (
         <div
