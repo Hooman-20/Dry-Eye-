@@ -52,9 +52,46 @@ If the user does not blink for longer than the selected threshold, the app trigg
 - Web Audio API
 - Vercel for deployment
 
+## Firebase Setup
+
+1. In the Firebase Console, open your project and go to **Project settings → General → Your apps**.
+2. Copy your web app config values.
+3. Create a `.env.local` file in the project root and add:
+
+```bash
+NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
+NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
+```
+
+4. In Firebase Console, enable **Authentication → Sign-in method → Email/Password**.
+5. In Firestore rules, ensure authenticated users can write session docs for their own `userId` (and read as desired for your app).
+
+## Auth Flow in This App
+
+- `/signup` creates a Firebase user with email/password.
+- `/login` signs in with email/password.
+- `/` (Blink Monitor) is protected and redirects to `/login` if no authenticated user exists.
+- Session summaries are still saved to Firestore, but now use Firebase Auth UID as `userId`.
+
+Firebase Auth persistence keeps users signed in after refresh by default.
+
+## Quick Testing
+
+1. Run `npm install` and `npm run dev`.
+2. Open `http://localhost:3000/signup` and create a test account.
+3. Confirm you are redirected to `/` and can start/stop a blink session.
+4. Stop a session and verify a Firestore `sessions` document is created with:
+   - `userId` equal to the signed-in user UID
+   - session summary fields (blinks, score, etc.)
+5. Refresh `/` and confirm you stay logged in.
+6. Click **Logout** and confirm you are redirected to `/login`.
+
 ## Research Disclaimer
 
 This project is a research prototype and not a medical device. Results are experimental and may not be accurate.
 
 If you experience eye pain, discomfort, or vision issues, stop using the tool and contact a qualified medical professional.
-
