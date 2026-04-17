@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { auth, isFirebaseConfigured } from "@/lib/firebase";
+
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,25 +14,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!auth) return;
-
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        router.replace("/");
-      }
-    });
-
-    return () => unsub();
-  }, [router]);
-
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-
-    if (!auth) {
-      setError("Firebase is not configured. Add NEXT_PUBLIC_FIREBASE_* variables.");
-      return;
-    }
 
     setLoading(true);
 
@@ -50,11 +31,7 @@ export default function LoginPage() {
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#000", color: "#fff", padding: 20 }}>
       <form onSubmit={onSubmit} style={{ width: "min(420px, 100%)", background: "#111", border: "1px solid #333", borderRadius: 12, padding: 20 }}>
         <h1 style={{ marginTop: 0 }}>Login</h1>
-        {!isFirebaseConfigured && (
-          <p style={{ color: "#ffcc66", fontSize: 14 }}>
-            Firebase config is missing. Add NEXT_PUBLIC_FIREBASE_* variables in your environment.
-          </p>
-        )}
+
 
         <label style={{ display: "block", marginBottom: 10 }}>
           Email

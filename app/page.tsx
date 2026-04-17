@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 
 import { collection, addDoc } from "firebase/firestore";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { auth, db, isFirebaseConfigured } from "@/lib/firebase";
 
 declare global {
   interface Window {
@@ -609,10 +608,6 @@ export default function Page() {
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    if (!auth) {
-      setAuthLoading(false);
-      return;
-    }
 
     const unsub = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -1501,7 +1496,7 @@ export default function Page() {
     // ignore
   }
 
-  if (!db || !user) return;
+
 
   try {
     await addDoc(collection(db, "sessions"), {
@@ -1582,7 +1577,7 @@ export default function Page() {
           </span>
           <button
             onClick={async () => {
-              if (!auth) return;
+
               await signOut(auth);
               router.replace("/login");
             }}
@@ -1593,11 +1588,6 @@ export default function Page() {
         </div>
       </div>
 
-      {!isFirebaseConfigured && (
-        <p style={{ marginTop: 10, color: "#ffcc66" }}>
-          Firebase config is missing. Add NEXT_PUBLIC_FIREBASE_* variables in your environment.
-        </p>
-      )}
 
       {running && !calibrating && alertOn && (
         <div
