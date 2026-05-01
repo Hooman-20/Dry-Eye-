@@ -1658,6 +1658,14 @@ export default function Page() {
             If you have eye pain, discomfort, or vision issues, please stop using this tool and contact a qualified medical
             professional.
           </p>
+          <p>
+          <strong>Data Collection and Use</strong><br/>
+          We collect limited information to operate and improve the service, including session duration, blink count, and basic interaction data. If an account is used, we may collect an email address for authentication.
+          </p>
+
+          <p>
+          We do not collect, store, or transmit any video, images, or biometric data. All camera input is processed locally in your browser and is never saved or sent to our servers.
+          </p>
 
           <p style={{ fontSize: 14, opacity: 0.8 }}>
             By clicking “I agree”, you acknowledge that you understand these limitations.
