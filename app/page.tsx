@@ -1652,12 +1652,14 @@ export default function Page() {
         >
           <h3 style={{ marginTop: 0, color: "#ffcc66" }}>Research Disclaimer</h3>
 
-          <p>This is a research prototype and not a medical device. The results are experimental and may not be accurate.</p>
+          <p>
+          This is a research prototype and is not a medical device. It is intended for general wellness and informational purposes only. The results are experimental and may not be accurate.
+          </p>
 
           <p>
-            If you have eye pain, discomfort, or vision issues, please stop using this tool and contact a qualified medical
-            professional.
+          This tool does not diagnose, treat, or prevent any medical condition. If you experience eye pain, discomfort, or vision issues, please stop using this tool and consult a qualified medical professional.
           </p>
+
           <p>
           <strong>Data Collection and Use</strong><br/>
           We collect limited information to operate and improve the service, including session duration, blink count, and basic interaction data. If an account is used, we may collect an email address for authentication.
@@ -1668,7 +1670,7 @@ export default function Page() {
           </p>
 
           <p style={{ fontSize: 14, opacity: 0.8 }}>
-            By clicking “I agree”, you acknowledge that you understand these limitations.
+          By clicking “I agree”, you acknowledge that you understand and accept these terms.
           </p>
 
           <button
