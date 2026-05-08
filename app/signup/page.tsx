@@ -14,6 +14,8 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!auth) return;
+
     const unsub = onAuthStateChanged(auth, (user) => {
       if (user) {
         router.replace("/");
@@ -27,6 +29,12 @@ export default function SignUpPage() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
+    if (!auth) {
+      setError("Firebase is not configured. Please set the NEXT_PUBLIC_FIREBASE_* environment variables.");
+      setLoading(false);
+      return;
+    }
 
     try {
       await createUserWithEmailAndPassword(auth, email, password);

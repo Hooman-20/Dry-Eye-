@@ -5,14 +5,37 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { collection, addDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
+type Point = { x: number; y: number };
+
+type LoadableScriptElement = HTMLScriptElement & { _loaded?: boolean };
+
+type FaceMeshResults = {
+  multiFaceLandmarks?: Point[][];
+};
+
+type FaceMeshInstance = {
+  setOptions: (options: {
+    maxNumFaces: number;
+    refineLandmarks: boolean;
+    minDetectionConfidence: number;
+    minTrackingConfidence: number;
+  }) => void;
+  onResults: (callback: (results: FaceMeshResults) => void) => void;
+  send: (input: { image: HTMLCanvasElement }) => Promise<void>;
+  close: () => void;
+};
+
+type FaceMeshConstructor = new (options: {
+  locateFile: (file: string) => string;
+}) => FaceMeshInstance;
+
 declare global {
   interface Window {
-    FaceMesh?: any;
+    FaceMesh?: FaceMeshConstructor;
+    webkitAudioContext?: typeof AudioContext;
   }
 }
 export {};
-
-type Point = { x: number; y: number };
 
 type SessionSummary = {
   totalBlinks: number;
@@ -64,9 +87,9 @@ function ear(p1: Point, p2: Point, p3: Point, p4: Point, p5: Point, p6: Point) {
 
 function loadScriptOnce(src: string) {
   return new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+    const existing = document.querySelector(`script[src="${src}"]`) as LoadableScriptElement | null;
     if (existing) {
-      if ((existing as any)._loaded) return resolve();
+      if (existing._loaded) return resolve();
       existing.addEventListener("load", () => resolve(), { once: true });
       existing.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)), { once: true });
       return;
@@ -76,7 +99,7 @@ function loadScriptOnce(src: string) {
     s.src = src;
     s.async = true;
     s.onload = () => {
-      (s as any)._loaded = true;
+      (s as LoadableScriptElement)._loaded = true;
       resolve();
     };
     s.onerror = () => reject(new Error(`Failed to load ${src}`));
@@ -648,11 +671,12 @@ export default function Page() {
 
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
-  const meshRef = useRef<any>(null);
+  const meshRef = useRef<FaceMeshInstance | null>(null);
   const activeRef = useRef(false);
   const startingRef = useRef(false);
   const faceDetectedRef = useRef(false);
   const faceMissingSinceRef = useRef<number | null>(null);
+  const stopRef = useRef<(() => Promise<void>) | null>(null);
 
   const baselineEarRef = useRef<number | null>(null);
   const calibStartRef = useRef<number | null>(null);
@@ -816,7 +840,7 @@ export default function Page() {
 
   function beep() {
     const AudioCtx =
-      (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+      window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
 
     if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
@@ -1044,7 +1068,7 @@ export default function Page() {
         minTrackingConfidence: 0.5,
       });
 
-      mesh.onResults((res: any) => {
+      mesh.onResults((res: FaceMeshResults) => {
         if (!activeRef.current) return;
 
         const now = performance.now();
@@ -1054,7 +1078,8 @@ export default function Page() {
 
         const videoEl = videoRef.current;
         const overlay = overlayCanvasRef.current;
-        const hasFace = !!res.multiFaceLandmarks?.length;
+        const landmarks = res.multiFaceLandmarks;
+        const hasFace = !!landmarks?.length;
 
         if (hasFace) {
           faceMissingSinceRef.current = null;
@@ -1083,7 +1108,7 @@ export default function Page() {
           return;
         }
 
-        const lm = res.multiFaceLandmarks[0] as Point[];
+        const lm = landmarks[0];
 
         const L = { p1: 33, p2: 160, p3: 159, p4: 133, p5: 145, p6: 144 };
         const R = { p1: 362, p2: 387, p3: 386, p4: 263, p5: 374, p6: 373 };
@@ -1357,9 +1382,9 @@ export default function Page() {
         }
       };
       rafRef.current = requestAnimationFrame(loop);
-    } catch (e: any) {
+    } catch (e: unknown) {
       cleanupLoopsAndStream();
-      dispatch({ type: "ERROR", message: e?.message ?? "Failed to start." });
+      dispatch({ type: "ERROR", message: e instanceof Error ? e.message : "Failed to start." });
     } finally {
       startingRef.current = false;
     }
@@ -1497,17 +1522,17 @@ export default function Page() {
     // ignore
   }
 
-  if (!userId) return; 
-
-  try {
-    await addDoc(collection(db, "sessions"), {
-      userId,
-      ...summary,
-      createdAt: Date.now(),
-    });
-    console.log("Session saved to Firebase");
-  } catch (err) {
-    console.error("Firebase save error:", err);
+  if (userId && db) {
+    try {
+      await addDoc(collection(db, "sessions"), {
+        userId,
+        ...summary,
+        createdAt: Date.now(),
+      });
+      console.log("Session saved to Firebase");
+    } catch (err) {
+      console.error("Firebase save error:", err);
+    }
   }
 
   setSessionSummary(summary);
@@ -1526,9 +1551,13 @@ export default function Page() {
     dispatch({ type: "SET_NOTIF_PERMISSION", perm: Notification.permission });
   }, [mounted]);
 
+  stopRef.current = stop;
+
   useEffect(() => {
     const onVis = () => {
-      if (document.hidden && running) stop();
+      if (document.hidden && running) {
+        void stopRef.current?.();
+      }
     };
 
     document.addEventListener("visibilitychange", onVis);
