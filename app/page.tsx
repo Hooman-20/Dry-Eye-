@@ -1524,6 +1524,7 @@ export default function Page() {
 
   if (userId && db) {
     try {
+      // Only anonymized or pseudonymous session analytics are stored. No webcam images or raw video are uploaded.
       await addDoc(collection(db, "sessions"), {
         userId,
         ...summary,
@@ -1656,17 +1657,27 @@ export default function Page() {
             lineHeight: 1.6,
           }}
         >
-          <h3 style={{ marginTop: 0, color: "#ffcc66" }}>Research Disclaimer</h3>
-
-          <p>This is a research prototype and not a medical device. The results are experimental and may not be accurate.</p>
+          <h3 style={{ marginTop: 0, color: "#ffcc66" }}>Privacy & Research Data Notice</h3>
 
           <p>
-            If you have eye pain, discomfort, or vision issues, please stop using this tool and contact a qualified medical
-            professional.
+            Webcam processing happens locally in your browser. No raw webcam video, images, or facial recordings are stored
+            or transmitted.
+          </p>
+
+          <p>
+            Limited analytics/session data may be stored in Firebase for research, debugging, and system improvement, such as
+            blink counts, session duration, blink timing statistics, visibility metrics, adaptive thresholds, and anonymous or
+            pseudonymous session identifiers.
+          </p>
+
+          <p>
+            This app is a research prototype and not a medical device. If you have eye pain, discomfort, or vision issues,
+            please stop using this tool and consult a qualified medical professional.
           </p>
 
           <p style={{ fontSize: 14, opacity: 0.8 }}>
-            By clicking “I agree”, you acknowledge that you understand these limitations.
+            By clicking “I agree”, you acknowledge that you understand this notice and consent to the limited research data
+            collection described above.
           </p>
 
           <button
