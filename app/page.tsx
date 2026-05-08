@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useReducer, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 
 import { collection, addDoc } from "firebase/firestore";
-import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
 
 declare global {
   interface Window {
@@ -600,26 +598,29 @@ function gradeSession(args: {
 }
 
 export default function Page() {
-  const router = useRouter();
+  
   const [mounted, setMounted] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setAuthLoading(false);
+  if (!mounted) return;
 
-      if (!currentUser) {
-        router.replace("/login");
-      }
-    });
+  let savedUserId = localStorage.getItem("userId");
 
-    return () => unsub();
-  }, [router]);
+  if (!savedUserId) {
+    savedUserId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "user-" + Math.random().toString(36).substring(2) + Date.now();
+
+    localStorage.setItem("userId", savedUserId);
+  }
+
+  setUserId(savedUserId);
+}, [mounted]);
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const {
@@ -1496,11 +1497,11 @@ export default function Page() {
     // ignore
   }
 
-  if (!user) return;
+  if (!userId) return; 
 
   try {
     await addDoc(collection(db, "sessions"), {
-      userId: user.uid,
+      userId,
       ...summary,
       createdAt: Date.now(),
     });
@@ -1559,33 +1560,9 @@ export default function Page() {
 
   const canUseNotifications = mounted && "Notification" in window;
 
-  if (authLoading || !user) {
-    return (
-      <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
-        Checking authentication...
-      </div>
-    );
-  }
-
   return (
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 14, opacity: 0.85 }}>
-            {user.email ? `Signed in as ${user.email}` : `Signed in as ${user.uid}`}
-          </span>
-          <button
-            onClick={async () => {
-              await signOut(auth);
-              router.replace("/login");
-            }}
-            style={{ padding: "8px 14px", cursor: "pointer" }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
+      <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
 
       {running && !calibrating && alertOn && (
         <div
@@ -1652,25 +1629,15 @@ export default function Page() {
         >
           <h3 style={{ marginTop: 0, color: "#ffcc66" }}>Research Disclaimer</h3>
 
-          <p>
-          This is a research prototype and is not a medical device. It is intended for general wellness and informational purposes only. The results are experimental and may not be accurate.
-          </p>
+          <p>This is a research prototype and not a medical device. The results are experimental and may not be accurate.</p>
 
           <p>
-          This tool does not diagnose, treat, or prevent any medical condition. If you experience eye pain, discomfort, or vision issues, please stop using this tool and consult a qualified medical professional.
-          </p>
-
-          <p>
-          <strong>Data Collection and Use</strong><br/>
-          We collect limited information to operate and improve the service, including session duration, blink count, and basic interaction data. If an account is used, we may collect an email address for authentication.
-          </p>
-
-          <p>
-          We do not collect, store, or transmit any video, images, or biometric data. All camera input is processed locally in your browser and is never saved or sent to our servers.
+            If you have eye pain, discomfort, or vision issues, please stop using this tool and contact a qualified medical
+            professional.
           </p>
 
           <p style={{ fontSize: 14, opacity: 0.8 }}>
-          By clicking “I agree”, you acknowledge that you understand and accept these terms.
+            By clicking “I agree”, you acknowledge that you understand these limitations.
           </p>
 
           <button
