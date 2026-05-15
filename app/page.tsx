@@ -2,7 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 
-import { collection, addDoc } from "firebase/firestore";
+import { addDoc, collection, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 type Point = { x: number; y: number };
@@ -73,6 +73,28 @@ type UserBlinkProfile = {
   preferredThresholdSec: number;
   totalSessions: number;
   updatedAt: number;
+};
+
+type ReminderHelpfulness = "yes" | "somewhat" | "no";
+type DetectionAccuracy = "very accurate" | "mostly accurate" | "not accurate";
+type AlertFrequency = "yes" | "no";
+
+type SessionFeedback = {
+  experienceRating: number | null;
+  reminderHelpfulness: ReminderHelpfulness | null;
+  detectionAccuracy: DetectionAccuracy | null;
+  alertsTooFrequent: AlertFrequency | null;
+  technicalIssues: string;
+  additionalFeedback: string;
+};
+
+const initialFeedback: SessionFeedback = {
+  experienceRating: null,
+  reminderHelpfulness: null,
+  detectionAccuracy: null,
+  alertsTooFrequent: null,
+  technicalIssues: "",
+  additionalFeedback: "",
 };
 
 function dist(a: Point, b: Point) {
@@ -624,6 +646,10 @@ export default function Page() {
   
   const [mounted, setMounted] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [pendingSessionSummary, setPendingSessionSummary] = useState<SessionSummary | null>(null);
+  const [sessionDocId, setSessionDocId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<SessionFeedback>(initialFeedback);
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => setMounted(true), []);
@@ -1030,6 +1056,10 @@ export default function Page() {
     dispatch({ type: "CLEAR_ERROR" });
     resetRefs();
     setSessionSummary(null);
+    setPendingSessionSummary(null);
+    setSessionDocId(null);
+    setFeedback(initialFeedback);
+    setFeedbackSaving(false);
     dispatch({ type: "START" });
     activeRef.current = true;
 
@@ -1522,21 +1552,27 @@ export default function Page() {
     // ignore
   }
 
+  let savedSessionDocId: string | null = null;
+
   if (userId && db) {
     try {
-      // Only anonymized or pseudonymous session analytics are stored. No webcam images or raw video are uploaded.
-      await addDoc(collection(db, "sessions"), {
+      // Only anonymized or pseudonymous session analytics are stored. No webcam images, raw video, or biometric media are uploaded.
+      const sessionDoc = await addDoc(collection(db, "sessions"), {
         userId,
         ...summary,
         createdAt: Date.now(),
       });
+      savedSessionDocId = sessionDoc.id;
       console.log("Session saved to Firebase");
     } catch (err) {
       console.error("Firebase save error:", err);
     }
   }
 
-  setSessionSummary(summary);
+  setSessionDocId(savedSessionDocId);
+  setPendingSessionSummary(summary);
+  setSessionSummary(null);
+  setFeedback(initialFeedback);
   dispatch({ type: "STOP" });
   cleanupLoopsAndStream();
 
@@ -1545,6 +1581,52 @@ export default function Page() {
     audioCtxRef.current = null;
   }
 }
+
+  function showFinalSummary() {
+    if (!pendingSessionSummary) return;
+    setSessionSummary(pendingSessionSummary);
+    setPendingSessionSummary(null);
+    setFeedback(initialFeedback);
+    setFeedbackSaving(false);
+  }
+
+  async function submitFeedback() {
+    const summaryToShow = pendingSessionSummary;
+    if (!summaryToShow || feedbackSaving) return;
+
+    setFeedbackSaving(true);
+
+    const sanitizedFeedback = {
+      experienceRating: feedback.experienceRating,
+      reminderHelpfulness: feedback.reminderHelpfulness,
+      detectionAccuracy: feedback.detectionAccuracy,
+      alertsTooFrequent: feedback.alertsTooFrequent,
+      technicalIssues: feedback.technicalIssues.trim(),
+      additionalFeedback: feedback.additionalFeedback.trim(),
+      submittedAt: Date.now(),
+    };
+
+    if (db && sessionDocId) {
+      try {
+        // Feedback stores only user-entered answers. It never stores video, images, or biometric data.
+        await updateDoc(doc(db, "sessions", sessionDocId), {
+          feedback: sanitizedFeedback,
+        });
+        console.log("Feedback saved to Firebase");
+      } catch (err) {
+        console.error("Feedback save error:", err);
+      }
+    }
+
+    setSessionSummary(summaryToShow);
+    setPendingSessionSummary(null);
+    setFeedback(initialFeedback);
+    setFeedbackSaving(false);
+  }
+
+  function skipFeedback() {
+    showFinalSummary();
+  }
 
   useEffect(() => {
     if (!mounted) return;
@@ -1698,8 +1780,12 @@ export default function Page() {
             if (running) stop();
             else void start();
           }}
-          style={{ padding: "8px 14px", cursor: agreed ? "pointer" : "not-allowed", opacity: agreed ? 1 : 0.5 }}
-          disabled={!agreed}
+          style={{
+            padding: "8px 14px",
+            cursor: agreed && !pendingSessionSummary ? "pointer" : "not-allowed",
+            opacity: agreed && !pendingSessionSummary ? 1 : 0.5,
+          }}
+          disabled={!agreed || !!pendingSessionSummary}
         >
           {running ? "Stop" : "Start"}
         </button>
@@ -1785,7 +1871,153 @@ export default function Page() {
       </div>
 
       <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
-        {sessionSummary && !running ? (
+        {pendingSessionSummary && !running ? (
+          <div
+            style={{
+              width: "min(820px, 100%)",
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 14,
+              padding: 24,
+            }}
+          >
+            <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Session Feedback</div>
+            <p style={{ marginTop: 0, marginBottom: 18, opacity: 0.82, lineHeight: 1.5 }}>
+              Your feedback is optional and helps improve blink reminders. No video, images, or biometric data are saved.
+            </p>
+
+            <div style={{ display: "grid", gap: 18 }}>
+              <div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>How was your experience?</div>
+                <div role="radiogroup" aria-label="How was your experience?" style={{ display: "flex", gap: 6 }}>
+                  {[1, 2, 3, 4, 5].map((rating) => (
+                    <button
+                      key={rating}
+                      type="button"
+                      onClick={() => setFeedback((current) => ({ ...current, experienceRating: rating }))}
+                      aria-label={`${rating} star${rating === 1 ? "" : "s"}`}
+                      aria-pressed={feedback.experienceRating === rating}
+                      style={{
+                        border: "1px solid #444",
+                        borderRadius: 8,
+                        background: feedback.experienceRating !== null && rating <= feedback.experienceRating ? "#3b2a05" : "#0b0b0b",
+                        color: feedback.experienceRating !== null && rating <= feedback.experienceRating ? "#ffcc66" : "#777",
+                        cursor: "pointer",
+                        fontSize: 28,
+                        lineHeight: 1,
+                        padding: "8px 10px",
+                      }}
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <fieldset style={{ border: "1px solid #222", borderRadius: 10, padding: 12 }}>
+                <legend style={{ padding: "0 6px", fontWeight: 700 }}>Did the reminders help you remember to blink?</legend>
+                {["yes", "somewhat", "no"].map((value) => (
+                  <label key={value} style={{ display: "inline-flex", alignItems: "center", gap: 8, marginRight: 16, marginTop: 8, textTransform: "capitalize" }}>
+                    <input
+                      type="radio"
+                      name="reminder-helpfulness"
+                      checked={feedback.reminderHelpfulness === value}
+                      onChange={() =>
+                        setFeedback((current) => ({
+                          ...current,
+                          reminderHelpfulness: value as ReminderHelpfulness,
+                        }))
+                      }
+                    />
+                    {value}
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset style={{ border: "1px solid #222", borderRadius: 10, padding: 12 }}>
+                <legend style={{ padding: "0 6px", fontWeight: 700 }}>How accurate was the blink detection?</legend>
+                {["very accurate", "mostly accurate", "not accurate"].map((value) => (
+                  <label key={value} style={{ display: "inline-flex", alignItems: "center", gap: 8, marginRight: 16, marginTop: 8, textTransform: "capitalize" }}>
+                    <input
+                      type="radio"
+                      name="detection-accuracy"
+                      checked={feedback.detectionAccuracy === value}
+                      onChange={() =>
+                        setFeedback((current) => ({
+                          ...current,
+                          detectionAccuracy: value as DetectionAccuracy,
+                        }))
+                      }
+                    />
+                    {value}
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset style={{ border: "1px solid #222", borderRadius: 10, padding: 12 }}>
+                <legend style={{ padding: "0 6px", fontWeight: 700 }}>Were the alerts too frequent?</legend>
+                {["yes", "no"].map((value) => (
+                  <label key={value} style={{ display: "inline-flex", alignItems: "center", gap: 8, marginRight: 16, marginTop: 8, textTransform: "capitalize" }}>
+                    <input
+                      type="radio"
+                      name="alerts-too-frequent"
+                      checked={feedback.alertsTooFrequent === value}
+                      onChange={() =>
+                        setFeedback((current) => ({
+                          ...current,
+                          alertsTooFrequent: value as AlertFrequency,
+                        }))
+                      }
+                    />
+                    {value}
+                  </label>
+                ))}
+              </fieldset>
+
+              <label style={{ display: "grid", gap: 8, fontWeight: 700 }}>
+                Did you experience any technical issues? <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
+                <input
+                  type="text"
+                  value={feedback.technicalIssues}
+                  onChange={(e) => setFeedback((current) => ({ ...current, technicalIssues: e.target.value }))}
+                  placeholder="Tell us about any glitches or setup issues"
+                  style={{ background: "#0b0b0b", color: "#fff", border: "1px solid #333", borderRadius: 8, padding: "10px 12px" }}
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 8, fontWeight: 700 }}>
+                Additional feedback <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
+                <textarea
+                  value={feedback.additionalFeedback}
+                  onChange={(e) => setFeedback((current) => ({ ...current, additionalFeedback: e.target.value }))}
+                  placeholder="Anything else you want to share?"
+                  rows={4}
+                  style={{ background: "#0b0b0b", color: "#fff", border: "1px solid #333", borderRadius: 8, padding: "10px 12px", resize: "vertical" }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => void submitFeedback()}
+                disabled={feedbackSaving}
+                style={{ padding: "10px 16px", cursor: feedbackSaving ? "not-allowed" : "pointer", opacity: feedbackSaving ? 0.7 : 1 }}
+              >
+                {feedbackSaving ? "Submitting…" : "Submit Feedback"}
+              </button>
+
+              <button
+                type="button"
+                onClick={skipFeedback}
+                disabled={feedbackSaving}
+                style={{ padding: "10px 16px", cursor: feedbackSaving ? "not-allowed" : "pointer", opacity: feedbackSaving ? 0.7 : 1 }}
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+        ) : sessionSummary && !running ? (
           <div
             style={{
               width: "min(820px, 100%)",
