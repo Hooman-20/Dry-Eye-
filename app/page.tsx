@@ -1676,6 +1676,53 @@ export default function Page() {
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
       <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
 
+      {!running && !pendingSessionSummary && !sessionSummary && (
+        <section
+          aria-labelledby="why-blinking-matters-title"
+          style={{
+            maxWidth: 760,
+            background: "#111",
+            border: "1px solid #333",
+            borderRadius: 10,
+            padding: 16,
+            marginTop: 16,
+            lineHeight: 1.6,
+          }}
+        >
+          <h2
+            id="why-blinking-matters-title"
+            style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}
+          >
+            Why blinking matters
+          </h2>
+
+          <p style={{ marginTop: 0 }}>
+            When we spend a long time looking at screens we often blink less without noticing. Blinking helps keep
+            the eyes comfortable and prevents dryness.
+          </p>
+
+          <p>
+            This tool helps you become more aware of your blinking during study work or gaming. It can remind you
+            to blink more often and take short breaks during long screen sessions.
+          </p>
+
+          <p>Small habits like blinking regularly and resting your eyes can help screen time feel more comfortable.</p>
+
+          <p
+            style={{
+              marginBottom: 0,
+              paddingTop: 12,
+              borderTop: "1px solid #222",
+              fontSize: 14,
+              opacity: 0.78,
+            }}
+          >
+            This app is not a medical device and does not diagnose or treat eye conditions. If you have pain
+            vision changes or ongoing discomfort talk to an eye care professional.
+          </p>
+        </section>
+      )}
+
       {running && !calibrating && alertOn && (
         <div
           role="dialog"
