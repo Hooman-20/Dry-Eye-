@@ -651,7 +651,6 @@ export default function Page() {
   const [feedback, setFeedback] = useState<SessionFeedback>(initialFeedback);
   const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const [hasContinued, setHasContinued] = useState(false);
   const [hasAgreed, setHasAgreed] = useState(false);
 
   useEffect(() => setMounted(true), []);
@@ -1673,55 +1672,31 @@ export default function Page() {
 
   const canUseNotifications = mounted && "Notification" in window;
 
-  if (!hasContinued) {
-    return (
-      <div
-        style={{
-          background: "#000",
-          color: "#fff",
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 20,
-        }}
-      >
-        <main
-          style={{
-            width: "min(760px, 100%)",
-            background: "#111",
-            border: "1px solid #2a2a2a",
-            borderRadius: 14,
-            padding: 24,
-            lineHeight: 1.55,
-          }}
-        >
-          <h1 style={{ marginTop: 0, marginBottom: 20 }}>Blink Monitor</h1>
-          <section>
-            <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
-              Why blinking matters
-            </h2>
-            <p style={{ marginTop: 0 }}>
-              Long screen time can make blinking slow. That can leave your eyes dry and tired.
-            </p>
-            <p style={{ marginBottom: 0 }}>
-              This tool helps you spot blink patterns and gives simple reminders.
-            </p>
-          </section>
-          <button
-            onClick={() => setHasContinued(true)}
-            style={{ marginTop: 24, padding: "10px 16px", cursor: "pointer" }}
-          >
-            Continue
-          </button>
-        </main>
-      </div>
-    );
-  }
-
   return (
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
       <h1 style={{ margin: 0 }}>Blink Monitor</h1>
+
+      <div
+        style={{
+          maxWidth: 640,
+          background: "#111",
+          border: "1px solid #333",
+          borderRadius: 10,
+          padding: 16,
+          marginTop: 16,
+          lineHeight: 1.6,
+        }}
+      >
+        <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
+          Why blinking matters
+        </h2>
+        <p style={{ marginTop: 0 }}>
+          Long screen time can make blinking slow. That can leave your eyes dry and tired.
+        </p>
+        <p style={{ marginBottom: 0 }}>
+          This tool helps you spot blink patterns and gives simple reminders.
+        </p>
+      </div>
 
       <div
         style={{
