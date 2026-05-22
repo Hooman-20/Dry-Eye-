@@ -1672,56 +1672,75 @@ export default function Page() {
 
   const canUseNotifications = mounted && "Notification" in window;
 
-  return (
-    <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
-      <h1 style={{ margin: 0 }}>Blink Monitor (Webcam)</h1>
-
-      {!running && !pendingSessionSummary && !sessionSummary && (
-        <section
-          aria-labelledby="why-blinking-matters-title"
+  if (!agreed) {
+    return (
+      <div
+        style={{
+          background: "#000",
+          color: "#fff",
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+        }}
+      >
+        <main
           style={{
-            maxWidth: 760,
+            width: "min(760px, 100%)",
             background: "#111",
-            border: "1px solid #333",
-            borderRadius: 10,
-            padding: 16,
-            marginTop: 16,
-            lineHeight: 1.6,
+            border: "1px solid #2a2a2a",
+            borderRadius: 14,
+            padding: 24,
+            lineHeight: 1.55,
           }}
         >
-          <h2
-            id="why-blinking-matters-title"
-            style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}
-          >
-            Why blinking matters
-          </h2>
+          <h1 style={{ marginTop: 0, marginBottom: 20 }}>Blink Monitor</h1>
 
-          <p style={{ marginTop: 0 }}>
-            When we spend a long time looking at screens we often blink less without noticing. Blinking helps keep
-            the eyes comfortable and prevents dryness.
-          </p>
+          <section>
+            <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
+              Why blinking matters
+            </h2>
+            <p style={{ marginTop: 0 }}>
+              Screen time can make us blink less. That can leave eyes dry and tired.
+            </p>
+            <p style={{ marginBottom: 0 }}>
+              This tool helps you notice your blink habits and gives simple reminders.
+            </p>
+          </section>
 
-          <p>
-            This tool helps you become more aware of your blinking during study work or gaming. It can remind you
-            to blink more often and take short breaks during long screen sessions.
-          </p>
+          <section style={{ marginTop: 20 }}>
+            <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
+              Privacy & research notice
+            </h2>
+            <p style={{ marginTop: 0 }}>
+              Webcam processing stays in your browser. Raw video and images are not uploaded.
+            </p>
+            <p>
+              We may store session stats for research and product improvement. This includes blink counts and timing data.
+            </p>
+            <p style={{ marginBottom: 0 }}>
+              This is a research tool. It is not medical care.
+            </p>
+          </section>
 
-          <p>Small habits like blinking regularly and resting your eyes can help screen time feel more comfortable.</p>
-
-          <p
-            style={{
-              marginBottom: 0,
-              paddingTop: 12,
-              borderTop: "1px solid #222",
-              fontSize: 14,
-              opacity: 0.78,
+          <button
+            onClick={() => {
+              requestNotifPermission();
+              dispatch({ type: "AGREE" });
             }}
+            style={{ marginTop: 24, padding: "10px 16px", cursor: "pointer" }}
           >
-            This app is not a medical device and does not diagnose or treat eye conditions. If you have pain
-            vision changes or ongoing discomfort talk to an eye care professional.
-          </p>
-        </section>
-      )}
+            I agree, continue
+          </button>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
+      <h1 style={{ margin: 0 }}>Blink Monitor</h1>
 
       {running && !calibrating && alertOn && (
         <div
@@ -1771,53 +1790,6 @@ export default function Page() {
               Tip: The adaptive threshold changes based on recent blink behavior.
             </div>
           </div>
-        </div>
-      )}
-
-      {!agreed && (
-        <div
-          style={{
-            maxWidth: 640,
-            background: "#111",
-            border: "1px solid #333",
-            borderRadius: 10,
-            padding: 16,
-            marginTop: 16,
-            lineHeight: 1.6,
-          }}
-        >
-          <h3 style={{ marginTop: 0, color: "#ffcc66" }}>Privacy & Research Data Notice</h3>
-
-          <p>
-            Webcam processing happens locally in your browser. No raw webcam video, images, or facial recordings are stored
-            or transmitted.
-          </p>
-
-          <p>
-            Limited analytics/session data may be stored in Firebase for research, debugging, and system improvement, such as
-            blink counts, session duration, blink timing statistics, visibility metrics, adaptive thresholds, and anonymous or
-            pseudonymous session identifiers.
-          </p>
-
-          <p>
-            This app is a research prototype and not a medical device. If you have eye pain, discomfort, or vision issues,
-            please stop using this tool and consult a qualified medical professional.
-          </p>
-
-          <p style={{ fontSize: 14, opacity: 0.8 }}>
-            By clicking “I agree”, you acknowledge that you understand this notice and consent to the limited research data
-            collection described above.
-          </p>
-
-          <button
-            onClick={() => {
-              requestNotifPermission();
-              dispatch({ type: "AGREE" });
-            }}
-            style={{ marginTop: 10, padding: "8px 14px", cursor: "pointer" }}
-          >
-            I agree
-          </button>
         </div>
       )}
 
