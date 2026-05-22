@@ -651,6 +651,8 @@ export default function Page() {
   const [feedback, setFeedback] = useState<SessionFeedback>(initialFeedback);
   const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [hasContinued, setHasContinued] = useState(false);
+  const [hasAgreed, setHasAgreed] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
@@ -683,7 +685,6 @@ export default function Page() {
     alertOn,
     noBlinkThreshold,
     adaptiveThresholdSec,
-    agreed,
     error,
     notifEnabled,
     notifPermission,
@@ -1050,7 +1051,7 @@ export default function Page() {
   }
 
   async function start() {
-    if (!agreed || running || startingRef.current) return;
+    if (!hasAgreed || running || startingRef.current) return;
     startingRef.current = true;
 
     dispatch({ type: "CLEAR_ERROR" });
@@ -1672,7 +1673,7 @@ export default function Page() {
 
   const canUseNotifications = mounted && "Notification" in window;
 
-  if (!agreed) {
+  if (!hasContinued) {
     return (
       <div
         style={{
@@ -1696,24 +1697,19 @@ export default function Page() {
           }}
         >
           <h1 style={{ marginTop: 0, marginBottom: 20 }}>Blink Monitor</h1>
-
           <section>
             <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
               Why blinking matters
             </h2>
             <p style={{ marginTop: 0 }}>
-              Screen time can make us blink less. That can leave eyes dry and tired.
+              Long screen time can make blinking slow. That can leave your eyes dry and tired.
             </p>
             <p style={{ marginBottom: 0 }}>
-              This tool helps you notice your blink habits and gives simple reminders.
+              This tool helps you spot blink patterns and gives simple reminders.
             </p>
           </section>
-
           <button
-            onClick={() => {
-              requestNotifPermission();
-              dispatch({ type: "AGREE" });
-            }}
+            onClick={() => setHasContinued(true)}
             style={{ marginTop: 24, padding: "10px 16px", cursor: "pointer" }}
           >
             Continue
@@ -1755,6 +1751,24 @@ export default function Page() {
           This app is a research prototype and not a medical device. If you have eye pain, discomfort, or vision issues,
           please stop using this tool and consult a qualified medical professional.
         </p>
+
+        <button
+          onClick={() => {
+            requestNotifPermission();
+            dispatch({ type: "AGREE" });
+            setHasAgreed(true);
+          }}
+          style={{ marginTop: 8, padding: "10px 16px", cursor: hasAgreed ? "default" : "pointer", opacity: hasAgreed ? 0.75 : 1 }}
+          disabled={hasAgreed}
+        >
+          {hasAgreed ? "You agreed" : "I agree"}
+        </button>
+
+        {!hasAgreed && (
+          <p style={{ marginBottom: 0, marginTop: 10, color: "#cfcfcf", fontSize: 14 }}>
+            Please agree to the notice before starting.
+          </p>
+        )}
       </div>
 
       {running && !calibrating && alertOn && (
@@ -1816,10 +1830,10 @@ export default function Page() {
           }}
           style={{
             padding: "8px 14px",
-            cursor: agreed && !pendingSessionSummary ? "pointer" : "not-allowed",
-            opacity: agreed && !pendingSessionSummary ? 1 : 0.5,
+            cursor: hasAgreed && !pendingSessionSummary ? "pointer" : "not-allowed",
+            opacity: hasAgreed && !pendingSessionSummary ? 1 : 0.5,
           }}
-          disabled={!agreed || !!pendingSessionSummary}
+          disabled={!hasAgreed || !!pendingSessionSummary}
         >
           {running ? "Stop" : "Start"}
         </button>
