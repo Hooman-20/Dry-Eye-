@@ -650,6 +650,7 @@ export default function Page() {
   const [sessionDocId, setSessionDocId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<SessionFeedback>(initialFeedback);
   const [feedbackSaving, setFeedbackSaving] = useState(false);
+  const [showWhyBlinkingMatters, setShowWhyBlinkingMatters] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [hasAgreed, setHasAgreed] = useState(false);
 
@@ -1674,28 +1675,22 @@ export default function Page() {
 
   return (
     <div style={{ background: "#000", color: "#fff", minHeight: "100vh", padding: 20 }}>
-      <h1 style={{ margin: 0 }}>Blink Monitor</h1>
-
-      <div
-        style={{
-          maxWidth: 640,
-          background: "#111",
-          border: "1px solid #333",
-          borderRadius: 10,
-          padding: 16,
-          marginTop: 16,
-          lineHeight: 1.6,
-        }}
-      >
-        <h2 style={{ marginTop: 0, marginBottom: 10, color: "#ffcc66", fontSize: 22 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0 }}>Blink Monitor</h1>
+        <button
+          onClick={() => setShowWhyBlinkingMatters(true)}
+          style={{
+            padding: "10px 16px",
+            borderRadius: 10,
+            border: "1px solid #333",
+            background: "#111",
+            color: "#ffcc66",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
           Why blinking matters
-        </h2>
-        <p style={{ marginTop: 0 }}>
-          Long screen time can make blinking slow. That can leave your eyes dry and tired.
-        </p>
-        <p style={{ marginBottom: 0 }}>
-          This tool helps you spot blink patterns and gives simple reminders.
-        </p>
+        </button>
       </div>
 
       <div
@@ -2153,6 +2148,62 @@ export default function Page() {
         <div><b>Adaptive threshold:</b> {adaptiveThresholdSec.toFixed(1)}s</div>
         <div style={{ opacity: 0.75 }}>Tip: if you don’t hear sound, click once on the page (browser audio rule).</div>
       </div>
+
+      {showWhyBlinkingMatters && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "min(680px, 100%)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 10,
+              padding: 18,
+              lineHeight: 1.6,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <h2 style={{ margin: 0, color: "#ffcc66", fontSize: 22 }}>Why blinking matters</h2>
+              <button
+                onClick={() => setShowWhyBlinkingMatters(false)}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #333",
+                  background: "#1a1a1a",
+                  color: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <p style={{ marginTop: 14 }}>
+              Long screen time can make blinking slow. That can leave your eyes dry and tired.
+            </p>
+            <p>This tool helps you spot blink patterns and gives simple reminders.</p>
+            <p style={{ marginBottom: 0 }}>
+              This app is a research prototype and not a medical device. If you have eye pain, discomfort, or vision
+              issues, please stop using this tool and consult a qualified medical professional.
+            </p>
+          </div>
+        </div>
+      )}
 
       {devMode && running && (
         <div
