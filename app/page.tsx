@@ -2194,34 +2194,64 @@ export default function Page() {
             </div>
 
             <p style={{ marginTop: 14 }}>
-              Long screen time can reduce how often people blink. That can make eyes feel dry,
-              tired, irritated, or blurry over time.
+              Research has shown that people tend to blink less frequently during extended
+              screen use such as working on computers, gaming, reading, or watching videos.
+              A typical resting blink rate is often around 15 to 20 blinks per minute, but
+              studies suggest this number can decrease significantly during visually demanding
+              tasks.
             </p>
 
             <p>
-              This tool helps you notice blink habits by tracking general blink timing and sending
-              reminders during long no blink periods.
+              Blinking plays an important role in maintaining the tear film that protects and
+              lubricates the surface of the eye. Each blink helps spread moisture evenly across
+              the eye while also removing small particles and reducing tear evaporation.
             </p>
 
             <p>
-              Webcam processing happens locally in your browser. Video and images are not recorded
-              or uploaded.
+              When blink frequency decreases for long periods of time, the eyes may become
+              dry, irritated, fatigued, or blurry. Some people may also experience burning
+              sensations, headaches, difficulty focusing, or symptoms commonly associated
+              with digital eye strain.
             </p>
 
             <p>
-              Blink detection may not always be perfect. Room lighting, glasses, face position,
-              and webcam quality can affect results.
+              This tool estimates blink timing patterns in real time using facial landmark
+              tracking directly in your browser. The system analyzes general eye movement
+              behavior to estimate blink frequency, blink spacing, prolonged no blink periods,
+              and overall blinking consistency during a session.
             </p>
 
             <p>
-              This app is a research prototype and not a medical device. It should not be used
-              for medical diagnosis or treatment.
-            </p>
+              The monitoring system adapts over time based on recent blinking behavior and
+  						session patterns. Reminder timing may automatically adjust depending on blink
+  						frequency, blink regularity, and detected no blink periods.
+						</p>
 
-            <p style={{ marginBottom: 0 }}>
-              If you experience eye pain, discomfort, headaches, or vision issues, stop using
-              the tool and contact a qualified medical professional.
-            </p>
+						<p>
+  						Blink detection accuracy may vary depending on lighting conditions, webcam
+  						quality, face position, camera angle, glasses, partial face visibility, rapid
+						  movement, or temporary tracking interruptions.
+						</p>
+
+						<p>
+						  Regular blinking and taking short breaks during screen use may help reduce eye
+						  fatigue and discomfort. Many eye care professionals recommend healthy screen
+						  habits such as adjusting brightness, improving lighting conditions, maintaining
+ 						 viewing distance, and following the 20 20 20 rule during extended computer use.
+						</p>
+
+						<p>
+						  All processing happens locally in your browser while the session is running.
+						  Webcam video and images are not recorded or uploaded as part of blink detection.
+						</p>
+
+						<p style={{ marginBottom: 0 }}>
+						  This application is a research prototype intended for educational and experimental
+						  purposes only. It is not a medical device and should not be used for medical
+						  diagnosis, treatment, or emergency evaluation. If you experience persistent eye
+ 						 pain, discomfort, severe dryness, headaches, dizziness, or vision problems,
+ 						 please stop using the tool and consult a qualified medical professional.
+						</p>
           </div>
         </div>
       )}
