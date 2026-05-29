@@ -2194,12 +2194,33 @@ export default function Page() {
             </div>
 
             <p style={{ marginTop: 14 }}>
-              Long screen time can make blinking slow. That can leave your eyes dry and tired.
+              Long screen time can reduce how often people blink. That can make eyes feel dry,
+              tired, irritated, or blurry over time.
             </p>
-            <p>This tool helps you spot blink patterns and gives simple reminders.</p>
+
+            <p>
+              This tool helps you notice blink habits by tracking general blink timing and sending
+              reminders during long no blink periods.
+            </p>
+
+            <p>
+              Webcam processing happens locally in your browser. Video and images are not recorded
+              or uploaded.
+            </p>
+
+            <p>
+              Blink detection may not always be perfect. Room lighting, glasses, face position,
+              and webcam quality can affect results.
+            </p>
+
+            <p>
+              This app is a research prototype and not a medical device. It should not be used
+              for medical diagnosis or treatment.
+            </p>
+
             <p style={{ marginBottom: 0 }}>
-              This app is a research prototype and not a medical device. If you have eye pain, discomfort, or vision
-              issues, please stop using this tool and consult a qualified medical professional.
+              If you experience eye pain, discomfort, headaches, or vision issues, stop using
+              the tool and contact a qualified medical professional.
             </p>
           </div>
         </div>
